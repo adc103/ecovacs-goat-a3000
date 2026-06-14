@@ -87,6 +87,7 @@ def _patch_cr0e4u() -> None:
         CapabilityStats,
         DeviceType,
     )
+    from deebot_client.commands.json.map import SetMajorMap
     from deebot_client.commands.json import (
         GetBorderSwitch,
         GetChildLock,
@@ -109,7 +110,7 @@ def _patch_cr0e4u() -> None:
     from deebot_client.commands.json.custom import CustomCommand
     from deebot_client.commands.json.error import GetError
     from deebot_client.commands.json.life_span import GetLifeSpan, ResetLifeSpan
-    from deebot_client.commands.json.map import GetCachedMapInfo, GetMapTrace
+    from deebot_client.commands.json.map import GetCachedMapInfo, GetMajorMap, GetMinorMap, GetMapSet, GetMapTrace
     from deebot_client.commands.json.network import GetNetInfo
     from deebot_client.commands.json.play_sound import PlaySound
     from deebot_client.commands.json.pos import GetPos
@@ -129,6 +130,7 @@ def _patch_cr0e4u() -> None:
         ErrorEvent,
         LifeSpan,
         LifeSpanEvent,
+        MajorMapEvent,
         MapChangedEvent,
         MapTraceEvent,
         MoveUpWarningEvent,
@@ -179,8 +181,11 @@ def _patch_cr0e4u() -> None:
                         CachedMapInfoEvent, [GetCachedMapInfo()]
                     ),
                     changed=CapabilityEvent(MapChangedEvent, []),
+                    major=CapabilitySet(MajorMapEvent, [GetMajorMap()], SetMajorMap),
+                    minor=CapabilityExecute(GetMinorMap),
                     position=CapabilityEvent(PositionsEvent, [GetPos()]),
                     rooms=CapabilityEvent(RoomsEvent, [GetCachedMapInfo()]),
+                    set=CapabilityExecute(GetMapSet),
                     trace=CapabilityEvent(MapTraceEvent, [GetMapTrace()]),
                 ),
                 network=CapabilityEvent(NetworkInfoEvent, [GetNetInfo()]),

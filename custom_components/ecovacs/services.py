@@ -5,7 +5,7 @@ import voluptuous as vol
 from homeassistant.components.lawn_mower import DOMAIN as LAWN_MOWER_DOMAIN
 from homeassistant.components.vacuum import DOMAIN as VACUUM_DOMAIN
 from homeassistant.core import HomeAssistant, SupportsResponse, callback
-from homeassistant.helpers import service
+from homeassistant.helpers import config_validation as cv, service
 
 from .const import DOMAIN
 
@@ -46,19 +46,25 @@ def async_setup_services(hass: HomeAssistant) -> None:
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_MOW_ZONE,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Required("zone_id"): vol.Coerce(str)}),
+        schema=cv.make_entity_service_schema({
+            vol.Required("zone_id"): vol.Coerce(str),
+        }),
         func="async_mow_zone",
     )
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_MOW_EDGE,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Required("zone_id"): vol.Coerce(str)}),
+        schema=cv.make_entity_service_schema({
+            vol.Required("zone_id"): vol.Coerce(str),
+        }),
         func="async_mow_edge",
     )
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_MOW_ENHANCED,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Required("zone_id"): vol.Coerce(str)}),
+        schema=cv.make_entity_service_schema({
+            vol.Required("zone_id"): vol.Coerce(str),
+        }),
         func="async_mow_enhanced",
     )
 
@@ -66,7 +72,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_SET_RAIN_DELAY,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({
+        schema=cv.make_entity_service_schema({
             vol.Required("enable"): bool,
             vol.Optional("delay_minutes", default=180): vol.All(int, vol.Range(min=0, max=1440)),
         }),
@@ -75,7 +81,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_SET_ANIM_PROTECT,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({
+        schema=cv.make_entity_service_schema({
             vol.Required("enable"): bool,
             vol.Optional("start_time", default="21:0"): str,
             vol.Optional("end_time", default="6:0"): str,
@@ -85,25 +91,33 @@ def async_setup_services(hass: HomeAssistant) -> None:
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_SET_CUT_HEIGHT,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Required("level"): vol.All(int, vol.Range(min=1, max=5))}),
+        schema=cv.make_entity_service_schema({
+            vol.Required("level"): vol.All(int, vol.Range(min=1, max=5)),
+        }),
         func="async_set_cut_height",
     )
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_SET_CUT_EFFICIENCY,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Required("level"): vol.All(int, vol.Range(min=1, max=3))}),
+        schema=cv.make_entity_service_schema({
+            vol.Required("level"): vol.All(int, vol.Range(min=1, max=3)),
+        }),
         func="async_set_cut_efficiency",
     )
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_SET_OBSTACLE_HEIGHT,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Required("level"): vol.All(int, vol.Range(min=1, max=3))}),
+        schema=cv.make_entity_service_schema({
+            vol.Required("level"): vol.All(int, vol.Range(min=1, max=3)),
+        }),
         func="async_set_obstacle_height",
     )
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_SET_VIDEO_CAMERA,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Required("enable"): bool}),
+        schema=cv.make_entity_service_schema({
+            vol.Required("enable"): bool,
+        }),
         func="async_set_video_camera",
     )
     service.async_register_platform_entity_service(
@@ -116,7 +130,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
     service.async_register_platform_entity_service(
         hass, DOMAIN, SERVICE_GET_ZONE_MOW_DURATION,
         entity_domain=LAWN_MOWER_DOMAIN,
-        schema=vol.Schema({vol.Optional("zone_id", default="0"): vol.Coerce(str)}),
+        schema=cv.make_entity_service_schema({
+            vol.Optional("zone_id", default="0"): vol.Coerce(str),
+        }),
         func="async_get_zone_mow_duration",
         supports_response=SupportsResponse.ONLY,
     )

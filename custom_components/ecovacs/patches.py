@@ -229,13 +229,18 @@ def _patch_cr0e4u() -> None:
 
     cr0e4u_module.get_device_info = get_device_info
 
-    # Clear the hardware cache so our patched get_device_info gets called
+    # Clear AND replace the hardware cache entry with our patched version
     try:
         import deebot_client.hardware as hw_module
+        # Remove from cache so it gets reloaded
         hw_module._DEVICES.pop("cr0e4u", None)
-        _LOGGER.debug("Cleared cr0e4u from hardware cache")
+        # Also remove from not-found set just in case
+        hw_module._NOT_FOUND.discard("cr0e4u")
+        # Pre-populate cache with our patched version directly
+        hw_module._DEVICES["cr0e4u"] = get_device_info()
+        _LOGGER.debug("Injected patched cr0e4u into hardware cache")
     except Exception as e:
-        _LOGGER.warning("Could not clear hardware cache: %s", e)
+        _LOGGER.warning("Could not update hardware cache: %s", e)
 
     _LOGGER.debug("cr0e4u patched for GOAT A3000 LiDAR")
 

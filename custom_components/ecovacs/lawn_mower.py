@@ -5,7 +5,7 @@ import logging
 from deebot_client.capabilities import Capabilities, DeviceType
 from deebot_client.device import Device
 from deebot_client.events import StateEvent
-from deebot_client.models import CleanAction, State
+from deebot_client.models import CleanAction, CleanMode, State
 
 from homeassistant.components.lawn_mower import (
     LawnMowerActivity,
@@ -82,13 +82,47 @@ class EcovacsMower(
         )
 
     async def async_start_mowing(self) -> None:
-        """Resume schedule."""
+        """Start auto mowing."""
         await self._clean_command(CleanAction.START)
 
     async def async_pause(self) -> None:
-        """Pauses the mower."""
+        """Pause the mower."""
         await self._clean_command(CleanAction.PAUSE)
 
     async def async_dock(self) -> None:
-        """Parks the mower until next schedule."""
+        """Return mower to dock."""
         await self._device.execute_command(self._capability.charge.execute())
+
+    async def async_mow_zone(self, zone_id: str) -> None:
+        """Start mowing a specific zone (spotArea)."""
+        import deebot_client.commands.json.clean as clean_module
+        cmd = clean_module.CleanMowerArea(
+            CleanMode.SPOT_AREA, [int(zone_id)]
+        )
+        await self._device.execute_command(cmd)
+        _LOGGER.debug("Started zone mowing for zone %s", zone_id)
+
+    async def async_mow_edge(self, zone_id: str) -> None:
+        """Start edge mowing for a specific zone (border)."""
+        import deebot_client.commands.json.clean as clean_module
+        # border mode uses a string value like "aid:2"
+        cmd = clean_module.CleanMowerArea.__new__(clean_module.CleanMowerArea)
+        cmd._additional_content = {
+            "type": "border",
+            "value": f"aid:{zone_id}",
+        }
+        clean_module.CleanMower.__init__(cmd, CleanAction.START)
+        await self._device.execute_command(cmd)
+        _LOGGER.debug("Started edge mowing for zone %s", zone_id)
+
+    async def async_mow_enhanced(self, zone_id: str) -> None:
+        """Start enhanced mowing for a specific zone (assart)."""
+        import deebot_client.commands.json.clean as clean_module
+        cmd = clean_module.CleanMowerArea.__new__(clean_module.CleanMowerArea)
+        cmd._additional_content = {
+            "type": "assart",
+            "value": zone_id,
+        }
+        clean_module.CleanMower.__init__(cmd, CleanAction.START)
+        await self._device.execute_command(cmd)
+        _LOGGER.debug("Started enhanced mowing for zone %s", zone_id)

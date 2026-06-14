@@ -3,3 +3,39 @@ raw_get_positions:
     entity:
       domain: vacuum
       integration: ecovacs
+
+mow_zone:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    zone_id:
+      required: true
+      selector:
+        text:
+      description: "Zone ID to mow (e.g. '1', '2', '3')"
+
+mow_edge:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    zone_id:
+      required: true
+      selector:
+        text:
+      description: "Zone ID for edge mowing"
+
+mow_enhanced:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    zone_id:
+      required: true
+      selector:
+        text:
+      description: "Zone ID for enhanced mowing"

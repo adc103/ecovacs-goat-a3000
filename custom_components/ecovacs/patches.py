@@ -224,3 +224,10 @@ def _patch_cr0e4u() -> None:
 
     cr0e4u_module.get_device_info = get_device_info
     _LOGGER.debug("cr0e4u patched for GOAT A3000 LiDAR")
+
+
+def _patch_clean_info_state() -> None:
+    """Patch GetCleanInfo to handle mower-specific idle state correctly."""
+    pass  # GetCleanInfo already handles 'idle' state correctly
+
+

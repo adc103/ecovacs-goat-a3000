@@ -14,7 +14,7 @@ mow_zone:
       required: true
       selector:
         text:
-      description: "Zone ID to mow (e.g. '1', '2', '3')"
+      description: "Zone ID to mow (e.g. '1', '2', '3', '4', '5')"
 
 mow_edge:
   target:
@@ -26,7 +26,7 @@ mow_edge:
       required: true
       selector:
         text:
-      description: "Zone ID for edge mowing"
+      description: "Zone ID for edge/border mowing"
 
 mow_enhanced:
   target:
@@ -38,4 +38,122 @@ mow_enhanced:
       required: true
       selector:
         text:
-      description: "Zone ID for enhanced mowing"
+      description: "Zone ID for enhanced (assart) mowing"
+
+set_rain_delay:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    enable:
+      required: true
+      selector:
+        boolean:
+      description: "Enable or disable rain delay"
+    delay_minutes:
+      required: false
+      default: 180
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: minutes
+      description: "Minutes to delay mowing after rain (default 180)"
+
+set_anim_protect:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    enable:
+      required: true
+      selector:
+        boolean:
+      description: "Enable or disable animal protection window"
+    start_time:
+      required: false
+      default: "21:0"
+      selector:
+        text:
+      description: "Start time of protection window (e.g. '21:0' for 9pm)"
+    end_time:
+      required: false
+      default: "6:0"
+      selector:
+        text:
+      description: "End time of protection window (e.g. '6:0' for 6am)"
+
+set_cut_height:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    level:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 5
+      description: "Cut height level (1=lowest, 5=highest)"
+
+set_cut_efficiency:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    level:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 3
+      description: "Cut efficiency level (1=standard, 2=efficient, 3=intensive)"
+
+set_obstacle_height:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    level:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 3
+      description: "Obstacle detection height sensitivity (1=low, 2=medium, 3=high)"
+
+set_video_camera:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    enable:
+      required: true
+      selector:
+        boolean:
+      description: "Enable or disable the video camera"
+
+get_zone_parameters:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+
+get_zone_mow_duration:
+  target:
+    entity:
+      domain: lawn_mower
+      integration: ecovacs
+  fields:
+    zone_id:
+      required: false
+      default: "0"
+      selector:
+        text:
+      description: "Zone ID to get mow duration for (default '0' = all zones)"

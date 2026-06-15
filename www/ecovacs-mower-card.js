@@ -402,19 +402,20 @@ class EcovacsMowerCard extends HTMLElement {
 
   // ── Zone picker modal ─────────────────────────────────────────────────────
 
-  _openZoneModal() {
+  _openZoneModal(mode = 'area') {
     const wrap = this.shadowRoot.getElementById('mapWrap');
     const img  = this.shadowRoot.getElementById('mapImg');
     const existing = wrap.querySelector('.zone-modal');
     if (existing) existing.remove();
 
     this._selectedZone = null;
+    this._selectedMode = mode;
 
     const modal = document.createElement('div');
     modal.className = 'zone-modal';
     modal.innerHTML = `
       <div class="zone-modal-header">
-        <div>Select a zone <span>then tap Mow to confirm</span></div>
+        <div id="zmTitle">Select a zone <span>then tap Mow to confirm</span></div>
         <button class="zone-modal-cancel" id="zmCancel">✕</button>
       </div>
       <div class="zone-bubbles-layer" id="bubblesLayer"></div>
@@ -424,12 +425,16 @@ class EcovacsMowerCard extends HTMLElement {
       </div>
     `;
 
+    const modeLabels = { area: 'Area Mow', edge: 'Edge Mow', enhanced: 'Enhanced Mow' };
+    const modeLabel = modeLabels[mode] || 'Mow';
+    modal.querySelector('#zmTitle').innerHTML = `Select zone for <strong>${modeLabel}</strong>`;
+
     modal.querySelector('#zmCancel').addEventListener('click', () => modal.remove());
     modal.querySelector('#zmBack').addEventListener('click', () => { modal.remove(); this._openModeModal(); });
     modal.querySelector('#zmConfirm').addEventListener('click', () => {
       if (this._selectedZone) {
         modal.remove();
-        this._startZoneMow(this._selectedZone);
+        this._startZoneMow(this._selectedZone, this._selectedMode);
       }
     });
 
@@ -489,15 +494,22 @@ class EcovacsMowerCard extends HTMLElement {
     actions[mode]?.();
   }
 
-  _startZoneMow(zoneId) {
+  _startZoneMow(zoneId, mode = 'area') {
     const name = this._config.zone_names?.[zoneId] || `Zone ${zoneId}`;
-    this._toast(`🌿 Starting ${name}…`);
-    this._hass.callService('ecovacs', 'mow_zone', {
-      entity_id: this._config.entity,
-      zone_id: zoneId,
-    }).catch(e => {
-      console.error('ecovacs-mower-card: mow_zone failed', e);
-      this._toast('⚠️ Failed to start zone mow');
+    const modeLabels = { area: 'Area', edge: 'Edge', enhanced: 'Enhanced' };
+    const modeLabel = modeLabels[mode] || 'Area';
+    this._toast(`🌿 ${modeLabel} mow: ${name}…`);
+
+    const serviceMap = {
+      area:     { domain: 'ecovacs', service: 'mow_zone',     data: { entity_id: this._config.entity, zone_id: zoneId } },
+      edge:     { domain: 'ecovacs', service: 'mow_edge',     data: { entity_id: this._config.entity, zone_id: zoneId } },
+      enhanced: { domain: 'ecovacs', service: 'mow_enhanced', data: { entity_id: this._config.entity, zone_id: zoneId } },
+    };
+    const call = serviceMap[mode] || serviceMap.area;
+
+    this._hass.callService(call.domain, call.service, call.data).catch(e => {
+      console.error('ecovacs-mower-card: zone mow failed', e);
+      this._toast('⚠️ Failed to start mow');
     });
   }
 

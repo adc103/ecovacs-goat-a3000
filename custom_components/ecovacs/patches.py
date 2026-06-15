@@ -15,6 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 def apply_patches() -> None:
     """Apply all patches to deebot_client."""
     _patch_clean_commands()
+    _patch_get_map_set_p2p()
     _patch_cr0e4u()
     _LOGGER.info("GOAT A3000 patches applied successfully")
 
@@ -283,3 +284,45 @@ def log_device_capabilities(device) -> None:
     # Log device.map object
     _LOGGER.warning("device.map object: %s", device.map)
     _LOGGER.warning("=== END DIAGNOSTIC ===")
+
+
+def _patch_get_map_set_p2p() -> None:
+    """Add MQTT p2p support to GetMapSet.
+
+    The GOAT A3000 sends getMapSet responses over MQTT p2p channel.
+    Without this patch, the library silently drops them with:
+    "Command getMapSet does not support p2p handling (yet)"
+    """
+    from types import MappingProxyType
+    from deebot_client.command import CommandMqttP2P, InitParam
+    from deebot_client.commands.json.common import JsonCommandMqttP2P
+    from deebot_client.commands.json.map import GetMapSet
+    from deebot_client.event_bus import EventBus
+    from typing import Any
+
+    # Only patch if not already patched
+    if issubclass(GetMapSet, CommandMqttP2P):
+        _LOGGER.debug("GetMapSet already has p2p support")
+        return
+
+    # Add p2p mixin and required attributes
+    GetMapSet.__bases__ = GetMapSet.__bases__ + (JsonCommandMqttP2P,)
+    GetMapSet._mqtt_params = MappingProxyType({
+        "mid": InitParam(str, "mid"),
+        "type": InitParam(str, "type"),
+    })
+
+    def _handle_mqtt_p2p(self, event_bus: EventBus, response: dict[str, Any]) -> None:
+        """Handle response received over the mqtt channel p2p."""
+        self.handle(event_bus, response)
+
+    GetMapSet._handle_mqtt_p2p = _handle_mqtt_p2p
+
+    # Re-register in COMMANDS_WITH_MQTT_P2P_HANDLING
+    from deebot_client.commands import COMMANDS_WITH_MQTT_P2P_HANDLING
+    from deebot_client.const import DataType
+    COMMANDS_WITH_MQTT_P2P_HANDLING[DataType.JSON]["getMapSet"] = GetMapSet
+
+    _LOGGER.warning(
+        "GetMapSet patched with MQTT p2p support - map data will now flow through"
+    )

@@ -82,7 +82,15 @@ class EcovacsMap(
         if svg := self._map.get_svg_map():
             return svg.encode()
 
-        return None
+        # Return a placeholder SVG when no map data is available yet
+        placeholder = """<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <rect width="400" height="400" fill="#1a1a2e"/>
+  <text x="200" y="180" font-family="sans-serif" font-size="16" fill="#4a9eff" text-anchor="middle">GOAT A3000 LiDAR</text>
+  <text x="200" y="210" font-family="sans-serif" font-size="14" fill="#888" text-anchor="middle">Map will appear after mowing</text>
+  <circle cx="200" cy="260" r="30" fill="none" stroke="#4a9eff" stroke-width="2"/>
+  <path d="M 190 260 L 210 260 M 200 250 L 200 270" stroke="#4a9eff" stroke-width="2"/>
+</svg>"""
+        return placeholder.encode()
 
     async def async_added_to_hass(self) -> None:
         """Set up the event listeners now that hass is ready."""
@@ -107,5 +115,3 @@ class EcovacsMap(
         """
         await super().async_update()
         self._map.refresh()
-
-# v0.2.2 force update

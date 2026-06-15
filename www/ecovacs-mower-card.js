@@ -373,6 +373,7 @@ class EcovacsMowerCard extends HTMLElement {
   }
 
   async _loadSvgMap() {
+    console.log('ecovacs-mower-card: _loadSvgMap called, hass=', !!this._hass, 'config=', this._config);
     const loading = this.shadowRoot.getElementById('mapLoading');
     const img = this.shadowRoot.getElementById('mapImg');
     const overlay = this.shadowRoot.getElementById('svgOverlay');
@@ -383,6 +384,7 @@ class EcovacsMowerCard extends HTMLElement {
     // Build authenticated URL using the image entity's access token
     // This is the standard HA pattern for image entities
     const imgState = this._hass?.states[this._config.image_entity];
+    console.log('ecovacs-mower-card: imgState=', imgState?.state, 'entity=', this._config.image_entity);
     if (!imgState) {
       loading.innerHTML = '⚠️ Image entity not found: ' + this._config.image_entity;
       return;
@@ -673,6 +675,17 @@ class EcovacsMowerCard extends HTMLElement {
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
+
+  connectedCallback() {
+    // Force a map load attempt 1s after element connects to DOM
+    // This catches cases where hass is set before the card is rendered
+    setTimeout(() => {
+      if (!this._mapLoaded && this._hass) {
+        console.log('ecovacs-mower-card: forcing initial map load');
+        this._loadSvgMap();
+      }
+    }, 1000);
+  }
 
   disconnectedCallback() {
     this._stopRefresh();

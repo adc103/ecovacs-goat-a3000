@@ -12,7 +12,7 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.0.0';
+const CARD_VERSION = '2.0.6';
 
 const ZONE_COLORS = {
   2: '#2dcc5a',

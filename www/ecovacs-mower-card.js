@@ -51,6 +51,7 @@ class EcovacsMowerCard extends HTMLElement {
     this._zoneElements = new Map(); // zone_id -> SVG element
     this._lastImageUrl = null;
     this._selectedZone = null;
+    this._mapLoaded = false;
   }
 
   // ── Card registration ────────────────────────────────────────────────────
@@ -390,14 +391,17 @@ class EcovacsMowerCard extends HTMLElement {
     const token = imgState.attributes.access_token;
     if (!token) {
       loading.innerHTML = '⚠️ No access token on image entity';
+      console.error('ecovacs-mower-card: no access_token, imgState=', imgState);
       return;
     }
 
     // HA image proxy URL with access token — no session auth needed
     const url = `/api/image_proxy/${this._config.image_entity}?token=${token}`;
+    console.debug('ecovacs-mower-card: fetching map from', url);
 
     try {
       const resp = await fetch(url);
+      console.debug('ecovacs-mower-card: fetch response', resp.status, resp.headers.get('content-type'));
       if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
 
       const svgText = await resp.text();
@@ -415,6 +419,7 @@ class EcovacsMowerCard extends HTMLElement {
       const blobUrl = URL.createObjectURL(blob);
       img.onload = () => {
         loading.style.display = 'none';
+        this._mapLoaded = true;
         URL.revokeObjectURL(blobUrl);
         this._buildZoneOverlay(svgDoc, overlay);
       };

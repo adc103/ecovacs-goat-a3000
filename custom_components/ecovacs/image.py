@@ -118,8 +118,10 @@ class EcovacsMap(
                     self._attr_extra_state_attributes["map_name"] = map_obj.name
 
         async def on_changed(event: MapChangedEvent) -> None:
-            _LOGGER.warning("MapChangedEvent received in image entity - updating image")
+            _LOGGER.warning("MapChangedEvent received in image entity - clearing cache and updating")
             self._attr_image_last_updated = event.when
+            # Clear the cached image so async_image() fetches fresh bytes
+            self._cached_image = None
             self.async_write_ha_state()
 
         self._subscribe(self._capability.cached_info.event, on_info)

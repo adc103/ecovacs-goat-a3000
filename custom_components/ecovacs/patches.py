@@ -16,6 +16,7 @@ def apply_patches() -> None:
     """Apply all patches to deebot_client."""
     _patch_clean_commands()
     _patch_get_map_set_p2p()
+    _patch_on_mi_handler()
     _patch_cr0e4u()
     _LOGGER.info("GOAT A3000 patches applied successfully")
 
@@ -326,3 +327,111 @@ def _patch_get_map_set_p2p() -> None:
     _LOGGER.warning(
         "GetMapSet patched with MQTT p2p support - map data will now flow through"
     )
+
+
+def _patch_on_mi_handler() -> None:
+    """Register OnMI message handler for GOAT mower zone polygon map data.
+
+    The GOAT A3000 sends zone polygon data via chunked onMI MQTT messages.
+    Without this patch, the map never renders because the polygon data is
+    silently ignored.
+    """
+    import base64
+    import lzma
+    import struct
+    from collections import defaultdict
+    from typing import Any
+    from deebot_client.events.map import MapSetEvent, MapSetType, MapSubsetEvent
+    from deebot_client.message import HandlingResult, HandlingState, MessageBodyDataDict
+    import deebot_client.messages.json as messages_module
+    import orjson
+
+    # Check if already registered
+    if "onMI" in messages_module.MESSAGES:
+        _LOGGER.debug("OnMI handler already registered")
+        return
+
+    _chunk_buffer: dict[str, dict[int, bytes]] = defaultdict(dict)
+    _chunk_counts: dict[str, int] = {}
+
+    def _decompress_lzma_b64(b64_data: str) -> bytes:
+        data = base64.b64decode(b64_data)
+        lzma_header = data[0:5]
+        len_value = struct.unpack("<I", data[5:9])[0]
+        filter_props = lzma._decode_filter_properties(lzma.FILTER_LZMA1, lzma_header)
+        dec = lzma.LZMADecompressor(lzma.FORMAT_RAW, None, [filter_props])
+        return dec.decompress(data[9:], len_value)
+
+    class OnMI(MessageBodyDataDict):
+        """Handler for onMI GOAT mower map chunk messages."""
+        NAME = "onMI"
+
+        @classmethod
+        def _handle_body_data_dict(cls, event_bus: Any, data: dict[str, Any]) -> HandlingResult:
+            batid = data.get("batid", "")
+            serial = int(data.get("serial", 0))
+            index = int(data.get("index", 0))
+            mid = str(data.get("mid", "1"))
+            info = data.get("info", "")
+            total_chunks = serial + 1
+
+            if not info or not batid:
+                return HandlingResult.analyse()
+
+            try:
+                chunk = _decompress_lzma_b64(info)
+            except Exception:
+                _LOGGER.warning("Failed to decompress onMI chunk %d for batid=%s", index, batid)
+                return HandlingResult.analyse()
+
+            _chunk_buffer[batid][index] = chunk
+            _chunk_counts[batid] = total_chunks
+
+            _LOGGER.debug("onMI chunk %d/%d (batid=%s, map=%s)", index + 1, total_chunks, batid, mid)
+
+            if len(_chunk_buffer[batid]) < total_chunks:
+                return HandlingResult.success()
+
+            try:
+                full_bytes = b"".join(_chunk_buffer[batid][i] for i in range(total_chunks))
+            except KeyError:
+                return HandlingResult.analyse()
+            finally:
+                del _chunk_buffer[batid]
+                _chunk_counts.pop(batid, None)
+
+            try:
+                zones = orjson.loads(full_bytes)
+            except Exception:
+                _LOGGER.warning("Failed to parse onMI JSON for map %s", mid)
+                return HandlingResult.analyse()
+
+            _LOGGER.warning("onMI: assembled %d zones for map %s - map should render now!", len(zones), mid)
+
+            subset_ids: list[int] = []
+            for zone in zones:
+                if not isinstance(zone, list) or len(zone) < 3:
+                    continue
+                try:
+                    zone_id = int(zone[0])
+                except (ValueError, TypeError):
+                    continue
+
+                parts = zone[2].split(";") if len(zone) > 2 else []
+                coord_pairs = [p for p in parts[1:] if "," in p]
+                coordinates = ";".join(coord_pairs)
+
+                if not coordinates:
+                    continue
+
+                event_bus.notify(MapSubsetEvent(id=zone_id, type=MapSetType.ROOMS, coordinates=coordinates, name=""))
+                subset_ids.append(zone_id)
+
+            if subset_ids:
+                event_bus.notify(MapSetEvent(MapSetType.ROOMS, subset_ids, mid))
+
+            return HandlingResult.success()
+
+    # Register in the messages dict
+    messages_module.MESSAGES["onMI"] = OnMI
+    _LOGGER.warning("OnMI handler registered - GOAT mower zone map data will now be processed")

@@ -389,10 +389,11 @@ class EcovacsMowerCard extends HTMLElement {
       btn.addEventListener('click', () => {
         const mode = btn.dataset.mode;
         modal.remove();
-        if (mode === 'area') {
-          this._openZoneModal();
-        } else {
+        if (mode === 'auto') {
           this._startMode(mode);
+        } else {
+          // area, edge, enhanced all need zone selection first
+          this._openZoneModal(mode);
         }
       });
     });

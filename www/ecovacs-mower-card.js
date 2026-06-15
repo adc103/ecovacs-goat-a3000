@@ -12,7 +12,7 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.2.4';
+const CARD_VERSION = '2.2.5';
 
 const _MOWER_COLOR = '#00aaff';  // must match map_renderer.py _MOWER_COLOR
 

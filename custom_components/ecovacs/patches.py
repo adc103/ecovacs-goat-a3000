@@ -157,6 +157,7 @@ def apply_patches() -> None:
     _patch_get_map_set_p2p()
     _patch_on_mi_handler()
     _patch_cr0e4u()
+    _patch_on_pos_handler()
     _LOGGER.info("GOAT A3000 patches applied successfully")
 
 

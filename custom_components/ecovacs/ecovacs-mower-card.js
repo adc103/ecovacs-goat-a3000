@@ -42,6 +42,7 @@ class EcovacsMowerCard extends HTMLElement {
     this._lastImageState = null;
     this._lastSvg = null;
     this._zoneIds = [];       // zone IDs parsed from SVG
+    this._zoneCentroids = {}; // zone_id -> {xPct, yPct}
     this._modalMode = null;   // current modal: 'mode' | 'zone'
     this._selectedZone = null;
     this._selectedMode = null;
@@ -295,11 +296,28 @@ class EcovacsMowerCard extends HTMLElement {
       const svg = await resp.text();
       if (!svg.includes('<svg')) throw new Error('Not SVG');
 
-      // Parse zone IDs from SVG text elements
+      // Parse zone centroids from SVG <text> elements
+      // Each zone label is at the polygon centroid: <text x="cx" y="cy">Zone N</text>
       this._zoneIds = [];
-      const textMatches = [...svg.matchAll(/Zone (\d+)/g)];
-      textMatches.forEach(m => {
-        const id = parseInt(m[1]);
+      this._zoneCentroids = {}; // zone_id -> {xPct, yPct} as % of viewBox
+
+      const parser2 = new DOMParser();
+      const svgDoc2 = parser2.parseFromString(svg, 'image/svg+xml');
+      const svgEl = svgDoc2.querySelector('svg');
+      const vb = svgEl?.getAttribute('viewBox')?.split(' ').map(Number);
+      const vbW = vb?.[2] || 1;
+      const vbH = vb?.[3] || 1;
+
+      svgDoc2.querySelectorAll('text').forEach(t => {
+        const match = t.textContent.trim().match(/^Zone (\d+)$/);
+        if (!match) return;
+        const id = parseInt(match[1]);
+        const x = parseFloat(t.getAttribute('x') || '0');
+        const y = parseFloat(t.getAttribute('y') || '0');
+        this._zoneCentroids[id] = {
+          xPct: (x / vbW) * 100,
+          yPct: (y / vbH) * 100,
+        };
         if (!this._zoneIds.includes(id)) this._zoneIds.push(id);
       });
       this._zoneIds.sort((a,b) => a-b);
@@ -405,30 +423,22 @@ class EcovacsMowerCard extends HTMLElement {
   }
 
   _placeBubbles(modal) {
-    const layer  = modal.querySelector('#bubblesLayer');
-    const bgImg  = modal.querySelector('#zoneBgImg');
+    const layer   = modal.querySelector('#bubblesLayer');
     const confirm = modal.querySelector('#zmConfirm');
 
-    // Compute zone centroids from SVG viewBox vs rendered size
-    // We'll position bubbles evenly since we don't have pixel coordinates
-    // Use a simple vertical stack based on zone Y order
-    const zoneCount = this._zoneIds.length;
-    if (zoneCount === 0) {
-      layer.innerHTML += '<div style="color:white;text-align:center;padding:20px">No zones found</div>';
+    if (!this._zoneIds.length) {
+      layer.innerHTML = '<div style="color:white;text-align:center;padding:20px">No zones found</div>';
       return;
     }
 
-    const layerH = layer.offsetHeight || 400;
-    const layerW = layer.offsetWidth  || 300;
+    this._zoneIds.forEach(zoneId => {
+      const name     = this._config.zone_names?.[zoneId] || `Zone ${zoneId}`;
+      const color    = ZONE_COLORS[zoneId] || '#aaa';
+      const centroid = this._zoneCentroids?.[zoneId];
 
-    this._zoneIds.forEach((zoneId, i) => {
-      const name  = this._config.zone_names?.[zoneId] || `Zone ${zoneId}`;
-      const color = ZONE_COLORS[zoneId] || '#aaa';
-
-      // Distribute bubbles vertically through the map
-      // Zone 1 (no-go) is skipped
-      const xPct = 50;
-      const yPct = 10 + (i / Math.max(zoneCount - 1, 1)) * 80;
+      // Use actual centroid from SVG text element position
+      const xPct = centroid?.xPct ?? 50;
+      const yPct = centroid?.yPct ?? 50;
 
       const bubble = document.createElement('div');
       bubble.className = 'zone-bubble';
@@ -438,7 +448,6 @@ class EcovacsMowerCard extends HTMLElement {
       bubble.dataset.zoneId = zoneId;
 
       bubble.addEventListener('click', () => {
-        // Deselect all
         modal.querySelectorAll('.zone-bubble').forEach(b => b.classList.remove('selected'));
         bubble.classList.add('selected');
         this._selectedZone = zoneId;

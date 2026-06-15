@@ -60,7 +60,10 @@ class EcovacsMap(
         hass: HomeAssistant,
     ) -> None:
         """Initialize entity."""
-        super().__init__(device, capability, hass=hass)
+        # Must call ImageEntity.__init__ explicitly to set up HTTP client
+        ImageEntity.__init__(self, hass)
+        # Then call EcovacsEntity.__init__ (skipping Entity.__init__ via super chain)
+        EcovacsEntity.__init__(self, device, capability)
         self._attr_extra_state_attributes = {}
         self._map = cast(Map, self._device.map)
 

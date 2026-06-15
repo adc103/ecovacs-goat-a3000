@@ -107,7 +107,7 @@ class EcovacsMowerCard extends HTMLElement {
 
     const newUrl = imgState ? this._buildImageUrl(imgState) : null;
     if (newUrl && newUrl !== this._lastImageUrl) {
-      this._loadSvgMap(newUrl);
+      this._loadSvgMap();
       this._lastImageUrl = newUrl;
     }
 
@@ -354,7 +354,7 @@ class EcovacsMowerCard extends HTMLElement {
       const imgState = this._hass.states[this._config.image_entity];
       if (imgState) {
         const url = this._buildImageUrl(imgState);
-        this._loadSvgMap(url);
+        this._loadSvgMap();
         this._lastImageUrl = url;
       }
     }
@@ -371,7 +371,7 @@ class EcovacsMowerCard extends HTMLElement {
     return `/api/image_proxy/${imgState.entity_id}?token=${token}&t=${ts}`;
   }
 
-  async _loadSvgMap(url) {
+  async _loadSvgMap() {
     const loading = this.shadowRoot.getElementById('mapLoading');
     const img = this.shadowRoot.getElementById('mapImg');
     const overlay = this.shadowRoot.getElementById('svgOverlay');
@@ -379,17 +379,30 @@ class EcovacsMowerCard extends HTMLElement {
     loading.style.display = 'flex';
     loading.innerHTML = '<div class="spinner"></div> Loading map…';
 
+    // Build authenticated URL using the image entity's access token
+    // This is the standard HA pattern for image entities
+    const imgState = this._hass?.states[this._config.image_entity];
+    if (!imgState) {
+      loading.innerHTML = '⚠️ Image entity not found: ' + this._config.image_entity;
+      return;
+    }
+
+    const token = imgState.attributes.access_token;
+    if (!token) {
+      loading.innerHTML = '⚠️ No access token on image entity';
+      return;
+    }
+
+    // HA image proxy URL with access token — no session auth needed
+    const url = `/api/image_proxy/${this._config.image_entity}?token=${token}`;
+
     try {
-      // Use hass.fetchWithAuth so the request is properly authenticated
-      const resp = this._hass
-        ? await this._hass.fetchWithAuth(`/api/image_proxy/${this._config.image_entity}`)
-        : await fetch(url, { credentials: 'same-origin' });
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
 
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const svgText = await resp.text();
-
       if (!svgText || !svgText.includes('<svg')) {
-        throw new Error('Response is not SVG');
+        throw new Error(`Not SVG (got ${svgText.substring(0, 50)})`);
       }
 
       // Parse SVG for zone overlay
@@ -405,7 +418,8 @@ class EcovacsMowerCard extends HTMLElement {
         URL.revokeObjectURL(blobUrl);
         this._buildZoneOverlay(svgDoc, overlay);
       };
-      img.onerror = () => {
+      img.onerror = (e) => {
+        console.error('ecovacs-mower-card: img load error', e);
         loading.style.display = 'none';
         URL.revokeObjectURL(blobUrl);
       };
@@ -413,7 +427,7 @@ class EcovacsMowerCard extends HTMLElement {
 
     } catch (e) {
       console.error('ecovacs-mower-card: failed to load map', e);
-      loading.innerHTML = `⚠️ Map unavailable: ${e.message}`;
+      loading.innerHTML = `⚠️ ${e.message}`;
       loading.style.display = 'flex';
     }
   }
@@ -624,7 +638,7 @@ class EcovacsMowerCard extends HTMLElement {
       const imgState = this._hass?.states[this._config.image_entity];
       if (imgState) {
         const url = this._buildImageUrl(imgState);
-        this._loadSvgMap(url);
+        this._loadSvgMap();
         this._lastImageUrl = url;
       }
     }, interval);

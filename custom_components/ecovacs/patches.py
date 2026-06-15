@@ -461,9 +461,10 @@ def _patch_on_mi_handler() -> None:
 
             return HandlingResult.success()
 
-    # Register in the messages dict
+    # Register for both onMI (main zone polygons) and onArI (sub-zone polygons)
     messages_module.MESSAGES["onMI"] = OnMI
-    _LOGGER.warning("OnMI handler registered - GOAT mower zone map data will now be processed")
+    messages_module.MESSAGES["onArI"] = OnMI
+    _LOGGER.warning("OnMI/onArI handlers registered - GOAT mower zone map data will now be processed")
 
 
 async def async_request_map_refresh(device) -> None:

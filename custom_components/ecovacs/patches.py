@@ -416,7 +416,7 @@ def _patch_on_mi_handler() -> None:
                 _LOGGER.warning("Failed to parse onMI JSON for map %s", mid)
                 return HandlingResult.analyse()
 
-            _LOGGER.warning("onMI: assembled %d zones for map %s - map should render now!", len(zones), mid)
+            _LOGGER.warning("onMI: assembled %d zone entries for map %s", len(zones), mid)
 
             subset_ids: list[int] = []
             for zone in zones:
@@ -427,18 +427,24 @@ def _patch_on_mi_handler() -> None:
                 except (ValueError, TypeError):
                     continue
 
-                parts = zone[2].split(";") if len(zone) > 2 else []
+                boundary = zone[2] if len(zone) > 2 else ""
+                if not isinstance(boundary, str):
+                    continue
+                parts = boundary.split(";")
                 coord_pairs = [p for p in parts[1:] if "," in p]
                 coordinates = ";".join(coord_pairs)
 
-                if not coordinates:
+                if not coordinates or len(coord_pairs) < 3:
                     continue
 
+                # Emit with ROOMS type - renderer will handle zone coloring
                 event_bus.notify(MapSubsetEvent(id=zone_id, type=MapSetType.ROOMS, coordinates=coordinates, name=""))
-                subset_ids.append(zone_id)
+                if zone_id not in subset_ids:
+                    subset_ids.append(zone_id)
 
             if subset_ids:
                 event_bus.notify(MapSetEvent(MapSetType.ROOMS, subset_ids, mid))
+                _LOGGER.warning("onMI: emitted %d zones: %s", len(subset_ids), subset_ids)
 
             # Fire MapChangedEvent to trigger image entity refresh
             try:

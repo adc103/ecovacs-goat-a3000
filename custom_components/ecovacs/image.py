@@ -79,19 +79,26 @@ class EcovacsMap(
 
     def image(self) -> bytes | None:
         """Return bytes of image or None."""
-        svg = self._map.get_svg_map()
-        _LOGGER.warning("image() called, get_svg_map returned: %s", "SVG data" if svg else "None")
-        if svg:
-            return svg.encode()
+        from deebot_client.capabilities import DeviceType
+        from .map_renderer import render_mower_map
 
-        # Return a placeholder SVG when no map data is available yet
-        placeholder = """<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
-  <rect width="400" height="400" fill="#1a1a2e"/>
-  <text x="200" y="180" font-family="sans-serif" font-size="16" fill="#4a9eff" text-anchor="middle">GOAT A3000 LiDAR</text>
-  <text x="200" y="210" font-family="sans-serif" font-size="14" fill="#888" text-anchor="middle">Map will appear after mowing</text>
-  <circle cx="200" cy="260" r="30" fill="none" stroke="#4a9eff" stroke-width="2"/>
-  <path d="M 190 260 L 210 260 M 200 250 L 200 270" stroke="#4a9eff" stroke-width="2"/>
-</svg>"""
+        # For mowers, use our Python renderer which handles polygon zone data
+        # The Rust map module returns None for mowers (it's designed for vacuum pixel maps)
+        if self._device.capabilities.device_type is DeviceType.MOWER:
+            subsets = list(self._map._map_data.map_subsets.values())
+            positions = self._map._map_data._positions
+            svg = render_mower_map(subsets, positions)
+            if svg:
+                _LOGGER.debug("Rendered mower map SVG with %d zones", len(subsets))
+                return svg.encode()
+        else:
+            # Vacuum: use Rust map module
+            svg = self._map.get_svg_map()
+            if svg:
+                return svg.encode()
+
+        # Placeholder when no map data yet
+        placeholder = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><rect width="400" height="400" fill="#1a1a2e"/><text x="200" y="180" font-family="sans-serif" font-size="16" fill="#4a9eff" text-anchor="middle">GOAT A3000 LiDAR</text><text x="200" y="210" font-family="sans-serif" font-size="14" fill="#888" text-anchor="middle">Map will appear after mowing</text></svg>'
         return placeholder.encode()
 
     async def async_added_to_hass(self) -> None:

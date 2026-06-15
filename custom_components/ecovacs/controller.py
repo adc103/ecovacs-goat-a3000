@@ -98,8 +98,8 @@ class EcovacsController:
                         # Schedule map refresh for mowers after connection stabilizes
                         from deebot_client.capabilities import DeviceType
                         if device.capabilities.device_type is DeviceType.MOWER:
-                            import asyncio
-                            asyncio.ensure_future(async_request_map_refresh(device))
+                            import asyncio as _asyncio
+                            _asyncio.ensure_future(async_request_map_refresh(device))
                         tg.create_task(_init(device))
 
             for device_config in devices.xmpp:

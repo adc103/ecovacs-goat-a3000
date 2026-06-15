@@ -80,28 +80,41 @@ class EcovacsMap(
     def image(self) -> bytes | None:
         """Return bytes of image or None."""
         from deebot_client.capabilities import DeviceType
-        from .map_renderer import render_mower_map, render_mower_map_from_store
+        from .map_renderer import render_mower_map_from_store
 
         # For mowers, use our Python renderer which handles polygon zone data
         # The Rust map module returns None for mowers (it's designed for vacuum pixel maps)
         if self._device.capabilities.device_type is DeviceType.MOWER:
             # Get zones from our _zone_store (map_data.map_subsets ignores ROOMS type)
-            from custom_components.ecovacs.patches import get_zone_store
-            mid = "1"  # default map ID
-            zone_store = get_zone_store(mid)
-            positions = self._map._map_data._positions
-            _LOGGER.warning(
-                "image() called: %d zones in store for mid=%s, positions=%s",
-                len(zone_store),
-                mid,
-                [str(p) for p in positions] if positions else "none"
+            from custom_components.ecovacs.patches import (
+                get_zone_store, get_path_store,
+                get_obstacle_store, get_dock_store,
             )
-            svg = render_mower_map_from_store(zone_store, positions)
+            mid = "1"
+            zone_store     = get_zone_store(mid)
+            path_store     = get_path_store(mid)
+            obstacle_store = get_obstacle_store(mid)
+            dock_store     = get_dock_store(mid)
+            positions      = self._map._map_data._positions
+
+            _LOGGER.warning(
+                "image(): zones=%d paths=%d obstacles=%d dock=%s",
+                len(zone_store), len(path_store), len(obstacle_store),
+                "yes" if dock_store else "no",
+            )
+
+            svg = render_mower_map_from_store(
+                zone_store,
+                positions,
+                path_store=path_store,
+                obstacle_store=obstacle_store,
+                dock_outline_store=dock_store,
+            )
             if svg:
-                _LOGGER.warning("image(): rendered SVG (%d chars) with %d zones", len(svg), len(zone_store))
+                _LOGGER.warning("image(): rendered SVG (%d chars)", len(svg))
                 return svg.encode()
             else:
-                _LOGGER.warning("image(): render_mower_map_from_store returned None (no zone data yet)")
+                _LOGGER.warning("image(): no zone data yet")
         else:
             # Vacuum: use Rust map module
             svg = self._map.get_svg_map()

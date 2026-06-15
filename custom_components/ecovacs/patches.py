@@ -419,40 +419,65 @@ def _patch_on_mi_handler() -> None:
                 _LOGGER.warning("onMI: JSON parse failed for batid=%s: %s", batid, e, exc_info=True)
                 return HandlingResult.analyse()
 
-            _LOGGER.warning("onMI: assembled %d zone entries for map %s (batid=%s)", len(zones), mid, batid)
+            _LOGGER.warning("onMI: assembled %d entries for map %s (batid=%s)", len(zones), mid, batid)
+
+            from custom_components.ecovacs.patches import (
+                update_zone_store,
+                _GLOBAL_ZONE_STORE, _GLOBAL_PATH_STORE,
+                _GLOBAL_OBSTACLE_STORE, _GLOBAL_DOCK_STORE,
+            )
+            from custom_components.ecovacs.map_renderer import parse_onmi_entry
+
+            if mid not in _GLOBAL_PATH_STORE:
+                _GLOBAL_PATH_STORE[mid] = []
+            if mid not in _GLOBAL_OBSTACLE_STORE:
+                _GLOBAL_OBSTACLE_STORE[mid] = []
 
             subset_ids: list[int] = []
+            new_zones = 0
+            new_paths = 0
+            new_obstacles = 0
+
             for zone in zones:
-                if not isinstance(zone, list) or len(zone) < 3:
-                    continue
-                try:
-                    zone_id = int(zone[0])
-                except (ValueError, TypeError):
-                    continue
+                parsed = parse_onmi_entry(zone)
 
-                boundary = zone[2] if len(zone) > 2 else ""
-                if not isinstance(boundary, str):
-                    continue
-                parts = boundary.split(";")
-                coord_pairs = [p for p in parts[1:] if "," in p]
-                coordinates = ";".join(coord_pairs)
-
-                if not coordinates or len(coord_pairs) < 3:
-                    continue
-
-                # Store in global zone store (map_data.map_subsets ignores ROOMS type)
-                # Keep the polygon with the most points for each zone
-                from custom_components.ecovacs.patches import get_zone_store, update_zone_store
-                existing = get_zone_store(mid).get(zone_id, "")
-                if len(coord_pairs) > (len(existing.split(";")) if existing else 0):
-                    update_zone_store(mid, zone_id, coordinates)
-                    _LOGGER.warning("onMI: stored zone_id=%d coords=%d pts mid=%s batid=%s", zone_id, len(coord_pairs), mid, batid)
+                # Zone polygons
+                for zone_id, pts in parsed["zone_polygons"].items():
+                    coords = ";".join(f"{x},{y}" for x, y in pts)
+                    update_zone_store(mid, zone_id, coords)
                     if zone_id not in subset_ids:
                         subset_ids.append(zone_id)
+                    new_zones += 1
 
-            if subset_ids:
-                from custom_components.ecovacs.patches import get_zone_store, _GLOBAL_ZONE_STORE
-                _LOGGER.warning("onMI: zone store for mid=%s now has zones=%s", mid, list(_GLOBAL_ZONE_STORE.get(mid, {}).keys()))
+                # Connector paths
+                seen_path_labels = {label for label, _ in _GLOBAL_PATH_STORE[mid]}
+                for label, pts in parsed["path_polygons"]:
+                    if label not in seen_path_labels:
+                        coords = ";".join(f"{x},{y}" for x, y in pts)
+                        _GLOBAL_PATH_STORE[mid].append((label, coords))
+                        seen_path_labels.add(label)
+                        new_paths += 1
+
+                # Obstacles
+                seen_obs_ids = {obs_id for obs_id, _ in _GLOBAL_OBSTACLE_STORE[mid]}
+                for obs_id, pts in parsed["obstacle_polygons"]:
+                    if obs_id not in seen_obs_ids:
+                        coords = ";".join(f"{x},{y}" for x, y in pts)
+                        _GLOBAL_OBSTACLE_STORE[mid].append((obs_id, coords))
+                        seen_obs_ids.add(obs_id)
+                        new_obstacles += 1
+
+                # Dock outline
+                if parsed["dock_outline"] and mid not in _GLOBAL_DOCK_STORE:
+                    _GLOBAL_DOCK_STORE[mid] = parsed["dock_outline"]
+
+            _LOGGER.warning(
+                "onMI: stored zones=%s paths=%d obstacles=%d (batid=%s)",
+                list(_GLOBAL_ZONE_STORE.get(mid, {}).keys()),
+                len(_GLOBAL_PATH_STORE.get(mid, [])),
+                len(_GLOBAL_OBSTACLE_STORE.get(mid, [])),
+                batid,
+            )
 
             # Fire MapChangedEvent to trigger image entity refresh
             try:
@@ -473,18 +498,37 @@ def _patch_on_mi_handler() -> None:
 
 async def async_request_map_refresh(device) -> None:
     """Request map data refresh from mower.
-    
-    Sends GetMapSet commands which triggers the mower to push
-    onMI chunks with zone polygon data.
+
+    1. Fetches getAreaSet (HTTP) to get all zone centroids as placeholders
+    2. Sends GetMapSet (MQTT) to trigger onMI/onArI polygon pushes
     """
     import asyncio
     from deebot_client.commands.json.map import GetMapSet
     from deebot_client.events.map import MapSetType
 
-    # Wait a bit for MQTT connection to stabilize
+    # Wait for MQTT connection to stabilize
     await asyncio.sleep(5)
 
     _LOGGER.warning("Requesting map data refresh from mower")
+
+    # Step 1: fetch zone centroids via getAreaSet HTTP command
+    # This gives us all zone IDs even if no polygon data is available
+    try:
+        from deebot_client.commands.json.common import ExecuteCommand
+        import json, base64, lzma, struct
+
+        class GetAreaSet(ExecuteCommand):
+            NAME = "getAreaSet"
+            def __init__(self, mid="1", aid="0", area_type="ar"):
+                super().__init__({"mid": mid, "aid": aid, "type": area_type})
+
+        for area_type in ["ar", "vw", "nc"]:
+            result = await device.execute_command(GetAreaSet(area_type=area_type))
+            _LOGGER.warning("getAreaSet type=%s result=%s", area_type, str(result)[:200] if result else None)
+    except Exception as e:
+        _LOGGER.warning("getAreaSet fetch error: %s", e)
+
+    # Step 2: trigger MQTT onMI/onArI pushes via GetMapSet
     try:
         for map_type in [MapSetType.ROOMS, MapSetType.VIRTUAL_WALLS, MapSetType.NO_MOP_ZONES]:
             await device.execute_command(GetMapSet("1", map_type))
@@ -494,16 +538,31 @@ async def async_request_map_refresh(device) -> None:
         _LOGGER.warning("Failed to request map refresh: %s", e)
 
 
-# Module-level zone store accessible from image.py
-# This is populated by the OnMI/onArI handlers
-_GLOBAL_ZONE_STORE: dict[str, dict[int, str]] = {}
+# ── Global map data stores ──────────────────────────────────────────────────
+# All stores are keyed by map ID (mid), typically "1"
+# Populated by OnMI/onArI MQTT message handlers
+
+_GLOBAL_ZONE_STORE:     dict[str, dict[int, str]]              = {}  # zone_id -> coord str
+_GLOBAL_PATH_STORE:     dict[str, list[tuple[str, str]]]       = {}  # [(label, coord_str)]
+_GLOBAL_OBSTACLE_STORE: dict[str, list[tuple[int, str]]]       = {}  # [(obs_id, coord_str)]
+_GLOBAL_DOCK_STORE:     dict[str, list[tuple[int, int]]]       = {}  # [(x, y)]
+
 
 def get_zone_store(mid: str = "1") -> dict[int, str]:
-    """Get the zone polygon store for a given map ID."""
     return _GLOBAL_ZONE_STORE.get(mid, {})
 
+def get_path_store(mid: str = "1") -> list[tuple[str, str]]:
+    return _GLOBAL_PATH_STORE.get(mid, [])
+
+def get_obstacle_store(mid: str = "1") -> list[tuple[int, str]]:
+    return _GLOBAL_OBSTACLE_STORE.get(mid, [])
+
+def get_dock_store(mid: str = "1") -> list[tuple[int, int]]:
+    return _GLOBAL_DOCK_STORE.get(mid, [])
+
 def update_zone_store(mid: str, zone_id: int, coordinates: str) -> None:
-    """Update a zone's polygon coordinates in the global store."""
     if mid not in _GLOBAL_ZONE_STORE:
         _GLOBAL_ZONE_STORE[mid] = {}
-    _GLOBAL_ZONE_STORE[mid][zone_id] = coordinates
+    existing = _GLOBAL_ZONE_STORE[mid].get(zone_id, "")
+    if len(coordinates.split(";")) > len(existing.split(";")):
+        _GLOBAL_ZONE_STORE[mid][zone_id] = coordinates

@@ -11,43 +11,44 @@ Data structure from onMI/onArI payloads:
   Fields with compound prefix and coords: connector path polygons
   Fields with int prefix >= 100: LiDAR-detected obstacle outlines
 
-Zone types (from getAreaSet):
-  Zone 1 = no-go zone (red hatched)
-  Zones 2,3,4,5 = mowing zones (colored fills)
-  Connector paths = passage corridors between zones
-  Obstacles = trees, rocks, garden features detected by LiDAR
+Zone types:
+  Zone 1 = no-go zone (orange/red hatched, matches app style)
+  Zones 2-5 = mowing zones (bright green fills)
+  Connector paths = passage corridors between zones (light grey)
+  Obstacles = trees, rocks, garden features (brown outlines)
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
-# Mowing zone fill colors (fill, stroke)
+# App-matching colors
+_ZONE_GREEN       = "#5ab552"   # bright lawn green (matches app)
+_ZONE_GREEN_DARK  = "#3d7a36"   # stroke
+_PATH_FILL        = "#c8c8c8"   # light grey path (matches app)
+_PATH_STROKE      = "#a0a0a0"
+_NO_GO_FILL       = "#e8743a"   # orange (matches app no-go color)
+_NO_GO_STROKE     = "#cc5520"
+_OBSTACLE_STROKE  = "#8B6914"   # subtle brown
+_DOCK_COLOR       = "#ffe605"
+_MOWER_COLOR      = "#1a7bd4"
+_BACKGROUND       = "#c8d8c0"   # light grey-green background (like app)
+
+# Different green tones for multiple zones
 _ZONE_COLORS = [
-    ("#1a6b3a", "#2dcc5a"),  # green
-    ("#1a4a7a", "#4a9eff"),  # blue
-    ("#4a2a7a", "#8a5eff"),  # purple
-    ("#1a6a5a", "#2dccaa"),  # teal
-    ("#6b5a1a", "#ccaa2d"),  # gold
+    (_ZONE_GREEN,  _ZONE_GREEN_DARK),
+    ("#52a555",    "#366e38"),
+    ("#4aaa7a",    "#2d7a55"),
+    ("#52aa90",    "#357a62"),
+    ("#5aaa70",    "#3a7a4a"),
 ]
 
-_NO_GO_FILL = "#7a0000"
-_NO_GO_STROKE = "#ff4444"
-_PATH_FILL = "#2a3a2a"
-_PATH_STROKE = "#5a7a5a"
-_OBSTACLE_FILL = "#8B4513"
-_OBSTACLE_STROKE = "#cd853f"
-_DOCK_COLOR = "#ffe605"
-_MOWER_COLOR = "#00aaff"
-_BACKGROUND = "#0d1f0d"
-
-# Zone IDs that are no-go zones (from getAreaSet type=nc/no-go pattern)
+# Zone IDs that are no-go zones
 _NO_GO_ZONE_IDS = {1}
-# Zone IDs that are mowing zones
-_MOWING_ZONE_IDS = {2, 3, 4, 5, 6, 7, 8, 9}
 
 
 def _parse_coords(coord_str: str) -> list[tuple[int, int]]:
@@ -65,15 +66,47 @@ def _parse_coords(coord_str: str) -> list[tuple[int, int]]:
     return points
 
 
-def parse_onmi_entry(entry: list) -> dict:
-    """Parse a single onMI/onArI entry into structured data.
+def _path_to_centerline(pts: list[tuple[int, int]]) -> tuple[list[tuple[int, int]], float]:
+    """Extract centerline and average width from a corridor polygon.
 
-    Returns dict with keys:
-      zone_polygons: {zone_id: [(x,y), ...]}
-      path_polygons: [(label, [(x,y), ...])]
-      obstacle_polygons: [(obs_id, [(x,y), ...])]
-      dock_outline: [(x,y), ...]
+    The polygon traces one side of the corridor then the other.
+    We split at the midpoint of the perimeter and pair opposite points.
+    Returns (centerline_points, avg_width_mm).
     """
+    if len(pts) < 6:
+        return pts, 2000.0
+
+    # Cumulative arc length along the polygon perimeter
+    cum: list[float] = [0.0]
+    for i in range(1, len(pts)):
+        dx = pts[i][0] - pts[i - 1][0]
+        dy = pts[i][1] - pts[i - 1][1]
+        cum.append(cum[-1] + math.sqrt(dx * dx + dy * dy))
+
+    # Split at perimeter midpoint
+    mid = cum[-1] / 2
+    split = min(range(len(cum)), key=lambda i: abs(cum[i] - mid))
+
+    side_a = pts[:split + 1]
+    side_b = list(reversed(pts[split:]))
+    n = min(len(side_a), len(side_b))
+    if n < 2:
+        return pts[: len(pts) // 2], 2000.0
+
+    centerline: list[tuple[int, int]] = []
+    widths: list[float] = []
+    for i in range(n):
+        ax, ay = side_a[i]
+        bx, by = side_b[i]
+        centerline.append(((ax + bx) // 2, (ay + by) // 2))
+        widths.append(math.sqrt((ax - bx) ** 2 + (ay - by) ** 2))
+
+    avg_width = sum(widths) / len(widths) if widths else 2000.0
+    return centerline, avg_width
+
+
+def parse_onmi_entry(entry: list) -> dict:
+    """Parse a single onMI/onArI entry into structured data."""
     result: dict = {
         "zone_polygons": {},
         "path_polygons": [],
@@ -86,7 +119,7 @@ def parse_onmi_entry(entry: list) -> dict:
 
     for j, field in enumerate(entry):
         if j == 0:
-            continue  # group/zone ID header
+            continue
         if not isinstance(field, str) or "," not in field:
             continue
 
@@ -101,12 +134,10 @@ def parse_onmi_entry(entry: list) -> dict:
             continue
 
         if prefix == "s1":
-            # Dock station outline
             if not result["dock_outline"]:
                 result["dock_outline"] = pts
 
         elif "," in prefix:
-            # Compound prefix = connector path between zones
             result["path_polygons"].append((prefix, pts))
 
         else:
@@ -116,10 +147,8 @@ def parse_onmi_entry(entry: list) -> dict:
                 continue
 
             if zone_id >= 100:
-                # LiDAR-detected obstacle
                 result["obstacle_polygons"].append((zone_id, pts))
             elif 1 <= zone_id <= 20:
-                # Zone polygon — keep best (most detailed)
                 existing = result["zone_polygons"].get(zone_id)
                 if existing is None or len(pts) > len(existing):
                     result["zone_polygons"][zone_id] = pts
@@ -136,17 +165,7 @@ def render_mower_map_from_store(
     dock_outline_store: list[tuple[int, int]] | None = None,
     no_go_ids: set[int] | None = None,
 ) -> str | None:
-    """Render full mower map SVG from all available data stores.
-
-    Args:
-        zone_store: {zone_id: coordinates_str} for zone polygons
-        positions: List of Position objects (mower location)
-        trace_points: Mowing path trace coordinate strings
-        path_store: [(label, coordinates_str)] for connector paths
-        obstacle_store: [(obs_id, coordinates_str)] for LiDAR obstacles
-        dock_outline_store: [(x,y)] for dock station shape
-        no_go_ids: Set of zone IDs that are no-go zones
-    """
+    """Render full mower map SVG from all available data stores."""
     if not zone_store and not path_store:
         return None
 
@@ -162,7 +181,7 @@ def render_mower_map_from_store(
 
     path_polygons: list[tuple[str, list[tuple[int, int]]]] = []
     if path_store:
-        seen = set()
+        seen: set = set()
         for label, coords_str in path_store:
             pts = _parse_coords(coords_str)
             key = (label, len(pts))
@@ -199,9 +218,9 @@ def render_mower_map_from_store(
 
     svg_w = max_x - min_x + pad * 2
     svg_h = max_y - min_y + pad * 2
-    sw = max(svg_w, svg_h) * 0.0015
-    font = max(svg_w, svg_h) * 0.02
-    dock_r = max(svg_w, svg_h) * 0.013
+    sw = max(svg_w, svg_h) * 0.0012
+    font = max(svg_w, svg_h) * 0.019
+    dock_r = max(svg_w, svg_h) * 0.014
 
     def to_svg(x: int, y: int) -> tuple[float, float]:
         return (x - min_x + pad, max_y - y + pad)
@@ -211,18 +230,55 @@ def render_mower_map_from_store(
             f"{sx:.0f},{sy:.0f}" for sx, sy in (to_svg(x, y) for x, y in pts)
         )
 
-    elements: list[str] = []
-    color_idx = 0
+    def pts_to_path(pts: list[tuple[int, int]]) -> str:
+        """Convert points to SVG path with rounded joins for smooth corridors."""
+        if not pts:
+            return ""
+        svg_pts = [to_svg(x, y) for x, y in pts]
+        d = f"M {svg_pts[0][0]:.0f},{svg_pts[0][1]:.0f}"
+        for sx, sy in svg_pts[1:]:
+            d += f" L {sx:.0f},{sy:.0f}"
+        return d
 
-    # 1. Connector paths (rendered first, behind zones)
+    elements: list[str] = []
+
+    # 1. Connector paths — rendered as layered strokes to look like a road/passage
+    # Road effect: dark border -> light fill -> white dashed centerline
+    path_stroke_w = max(svg_w, svg_h) * 0.022  # narrower than before
+
     for _, pts in path_polygons:
-        p = pts_to_poly(pts)
+        if len(pts) < 2:
+            continue
+        svg_pts = [to_svg(x, y) for x, y in pts]
+        d = f"M {svg_pts[0][0]:.0f},{svg_pts[0][1]:.0f}"
+        for sx, sy in svg_pts[1:]:
+            d += f" L {sx:.0f},{sy:.0f}"
+
+        # Layer 1: dark border (widest)
         elements.append(
-            f'<polygon points="{p}" fill="{_PATH_FILL}" fill-opacity="0.95" '
-            f'stroke="{_PATH_STROKE}" stroke-width="{sw:.0f}"/>'
+            f'<path d="{d}" fill="none" '
+            f'stroke="#888888" stroke-width="{path_stroke_w:.0f}" '
+            f'stroke-linecap="round" stroke-linejoin="round"/>'
+        )
+        # Layer 2: light grey road surface
+        elements.append(
+            f'<path d="{d}" fill="none" '
+            f'stroke="#d8d8d8" stroke-width="{path_stroke_w * 0.72:.0f}" '
+            f'stroke-linecap="round" stroke-linejoin="round"/>'
+        )
+        # Layer 3: white dashed centerline
+        dash = path_stroke_w * 0.8
+        gap = path_stroke_w * 0.6
+        elements.append(
+            f'<path d="{d}" fill="none" '
+            f'stroke="white" stroke-opacity="0.7" '
+            f'stroke-width="{path_stroke_w * 0.12:.0f}" '
+            f'stroke-linecap="round" stroke-linejoin="round" '
+            f'stroke-dasharray="{dash:.0f} {gap:.0f}"/>'
         )
 
     # 2. Mowing zones
+    color_idx = 0
     for zid, pts in sorted(zone_polygons.items()):
         if zid in no_go_ids:
             continue
@@ -230,71 +286,67 @@ def render_mower_map_from_store(
         color_idx += 1
         p = pts_to_poly(pts)
         elements.append(
-            f'<polygon points="{p}" fill="{fill}" fill-opacity="0.75" '
-            f'stroke="{stroke}" stroke-width="{sw:.0f}"/>'
+            f'<polygon points="{p}" fill="{fill}" '
+            f'stroke="{stroke}" stroke-width="{sw:.0f}" '
+            f'stroke-linejoin="round"/>'
         )
         svg_pts = [to_svg(x, y) for x, y in pts]
         cx = sum(q[0] for q in svg_pts) / len(svg_pts)
         cy = sum(q[1] for q in svg_pts) / len(svg_pts)
         elements.append(
             f'<text x="{cx:.0f}" y="{cy:.0f}" text-anchor="middle" '
-            f'dominant-baseline="middle" font-size="{font:.0f}" fill="white" '
-            f'font-weight="bold" font-family="sans-serif">Zone {zid}</text>'
+            f'dominant-baseline="middle" font-size="{font:.0f}" '
+            f'fill="white" font-weight="bold" font-family="sans-serif" '
+            f'filter="url(#shadow)">Zone {zid}</text>'
         )
 
-    # 3. No-go zones
+    # 3. No-go zones — orange hatched like app
+    hatch_size = sw * 8
     for zid in sorted(no_go_ids):
         if zid not in zone_polygons:
             continue
         p = pts_to_poly(zone_polygons[zid])
         elements.append(
-            f'<polygon points="{p}" fill="{_NO_GO_FILL}" fill-opacity="0.7" '
+            f'<polygon points="{p}" fill="url(#nogo-hatch)" '
             f'stroke="{_NO_GO_STROKE}" stroke-width="{sw:.0f}" '
-            f'stroke-dasharray="{sw*4:.0f}"/>'
+            f'stroke-linejoin="round"/>'
         )
         svg_pts = [to_svg(x, y) for x, y in zone_polygons[zid]]
         cx = sum(q[0] for q in svg_pts) / len(svg_pts)
         cy = sum(q[1] for q in svg_pts) / len(svg_pts)
         elements.append(
             f'<text x="{cx:.0f}" y="{cy:.0f}" text-anchor="middle" '
-            f'dominant-baseline="middle" font-size="{font:.0f}" fill="white" '
-            f'font-weight="bold" font-family="sans-serif">⛔</text>'
+            f'dominant-baseline="middle" font-size="{font:.0f}" '
+            f'fill="white" font-weight="bold" font-family="sans-serif">⛔</text>'
         )
 
-    # 4. Obstacles
+    # 4. Obstacles — subtle brown outlines only
     for obs_id, pts in obstacle_polygons:
         p = pts_to_poly(pts)
-        if len(pts) >= 20:
-            elements.append(
-                f'<polygon points="{p}" fill="{_OBSTACLE_FILL}" fill-opacity="0.6" '
-                f'stroke="{_OBSTACLE_STROKE}" stroke-width="{sw*1.5:.0f}"/>'
-            )
-        else:
-            elements.append(
-                f'<polygon points="{p}" fill="none" '
-                f'stroke="{_OBSTACLE_STROKE}" stroke-width="{sw*1.5:.0f}" '
-                f'stroke-opacity="0.7"/>'
-            )
+        elements.append(
+            f'<polygon points="{p}" fill="{_OBSTACLE_STROKE}" fill-opacity="0.25" '
+            f'stroke="{_OBSTACLE_STROKE}" stroke-width="{sw:.0f}" '
+            f'stroke-opacity="0.6" stroke-linejoin="round"/>'
+        )
 
     # 5. Mowing path traces
     if trace_points:
         for trace in trace_points:
-            pts = _parse_coords(trace)
-            if len(pts) < 2:
+            trace_pts = _parse_coords(trace)
+            if len(trace_pts) < 2:
                 continue
-            pts_str = " ".join(
-                f"{sx:.0f},{sy:.0f}" for sx, sy in (to_svg(x, y) for x, y in pts)
-            )
+            d = pts_to_path(trace_pts)
             elements.append(
-                f'<polyline points="{pts_str}" fill="none" '
-                f'stroke="rgba(255,255,255,0.5)" stroke-width="{sw*0.6:.0f}"/>'
+                f'<path d="{d}" fill="none" '
+                f'stroke="white" stroke-opacity="0.5" '
+                f'stroke-width="{sw*0.6:.0f}" stroke-linecap="round"/>'
             )
 
-    # 6. Dock outline
+    # 6. Dock outline (subtle yellow shape)
     if dock_outline and len(dock_outline) >= 3:
         p = pts_to_poly(dock_outline)
         elements.append(
-            f'<polygon points="{p}" fill="{_DOCK_COLOR}" fill-opacity="0.25" '
+            f'<polygon points="{p}" fill="{_DOCK_COLOR}" fill-opacity="0.3" '
             f'stroke="{_DOCK_COLOR}" stroke-width="{sw:.0f}"/>'
         )
 
@@ -302,12 +354,12 @@ def render_mower_map_from_store(
     dx, dy = to_svg(0, 0)
     elements.append(
         f'<circle cx="{dx:.0f}" cy="{dy:.0f}" r="{dock_r:.0f}" '
-        f'fill="{_DOCK_COLOR}" stroke="#333" stroke-width="{sw:.0f}"/>'
+        f'fill="{_DOCK_COLOR}" stroke="white" stroke-width="{sw*1.5:.0f}"/>'
     )
     elements.append(
         f'<text x="{dx:.0f}" y="{dy:.0f}" text-anchor="middle" '
-        f'dominant-baseline="middle" font-size="{dock_r:.0f}" fill="#333" '
-        f'font-weight="bold" font-family="sans-serif">⌂</text>'
+        f'dominant-baseline="middle" font-size="{dock_r * 1.1:.0f}" '
+        f'fill="#333" font-weight="bold" font-family="sans-serif">⌂</text>'
     )
 
     # 8. Mower position
@@ -322,22 +374,38 @@ def render_mower_map_from_store(
                         sx, sy = to_svg(int(px), int(py))
                         elements.append(
                             f'<circle cx="{sx:.0f}" cy="{sy:.0f}" '
-                            f'r="{dock_r*0.7:.0f}" fill="{_MOWER_COLOR}" '
-                            f'stroke="white" stroke-width="{sw:.0f}"/>'
+                            f'r="{dock_r * 0.8:.0f}" fill="{_MOWER_COLOR}" '
+                            f'stroke="white" stroke-width="{sw*1.5:.0f}"/>'
                         )
             except Exception:
                 pass
+
+    # Build defs (hatch pattern + text shadow)
+    hatch_w = sw * 10
+    defs = (
+        f'<defs>'
+        f'<pattern id="nogo-hatch" patternUnits="userSpaceOnUse" '
+        f'width="{hatch_w:.0f}" height="{hatch_w:.0f}" patternTransform="rotate(45)">'
+        f'<rect width="{hatch_w:.0f}" height="{hatch_w:.0f}" fill="{_NO_GO_FILL}" fill-opacity="0.7"/>'
+        f'<line x1="0" y1="0" x2="0" y2="{hatch_w:.0f}" '
+        f'stroke="{_NO_GO_STROKE}" stroke-width="{sw*2:.0f}" stroke-opacity="0.5"/>'
+        f'</pattern>'
+        f'<filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">'
+        f'<feDropShadow dx="0" dy="0" stdDeviation="{sw*2:.0f}" flood-color="black" flood-opacity="0.6"/>'
+        f'</filter>'
+        f'</defs>'
+    )
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" '
         f'viewBox="0 0 {svg_w:.0f} {svg_h:.0f}">'
         f'<rect width="{svg_w:.0f}" height="{svg_h:.0f}" fill="{_BACKGROUND}"/>'
+        + defs
         + "".join(elements)
         + "</svg>"
     )
 
 
-# Legacy stub for compatibility
+# Legacy stub
 def render_mower_map(map_subsets: list[Any], positions: list[Any] | None = None) -> str | None:
-    """Legacy renderer — not used for mowers."""
     return None

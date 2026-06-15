@@ -89,27 +89,31 @@ class EcovacsMap(
             from custom_components.ecovacs.patches import (
                 get_zone_store, get_path_store,
                 get_obstacle_store, get_dock_store,
-                get_trace_store, get_mower_heading,
+                get_trace_store, get_trace_store_svg, get_mower_heading,
             )
             mid = "1"
             zone_store     = get_zone_store(mid)
             path_store     = get_path_store(mid)
             obstacle_store = get_obstacle_store(mid)
             dock_store     = get_dock_store(mid)
-            trace_store    = get_trace_store()
+            trace_svg      = get_trace_store_svg()
+            pos_trace      = get_trace_store()
             heading        = get_mower_heading()
             positions      = self._map._map_data._positions
 
-            _LOGGER.warning(
-                "image(): zones=%d paths=%d obstacles=%d trace=%d heading=%d",
-                len(zone_store), len(path_store), len(obstacle_store),
-                len(trace_store), heading,
-            )
+            # Prefer onMapTrace polygons; fall back to onPos polyline
+            if trace_svg:
+                trace_points = trace_svg
+            elif pos_trace:
+                trace_points = [";".join(f"{x},{y}" for x, y, _ in pos_trace)]
+            else:
+                trace_points = None
 
-            # Build trace coordinate string for renderer
-            trace_points = None
-            if trace_store:
-                trace_points = [";".join(f"{x},{y}" for x, y, _ in trace_store)]
+            _LOGGER.warning(
+                "image(): zones=%d paths=%d obstacles=%d trace_svg=%d pos=%d heading=%d",
+                len(zone_store), len(path_store), len(obstacle_store),
+                len(trace_svg), len(pos_trace), heading,
+            )
 
             svg = render_mower_map_from_store(
                 zone_store,

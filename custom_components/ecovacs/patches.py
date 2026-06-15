@@ -13,101 +13,135 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _patch_on_pos_handler() -> None:
-    """Register onPos MQTT handler to capture live mower position and heading."""
+    """Patch MqttClient._handle_message to intercept onPos, onCleanInfo, onMapTrace."""
+    import json as _json
     from deebot_client.mqtt_client import MqttClient  # noqa: PLC0415
 
-    original_handle = getattr(MqttClient, '_handle_message', None)
-    if original_handle is None:
+    original_fn = getattr(MqttClient, '_handle_message', None)
+    if original_fn is None:
+        _LOGGER.warning("MqttClient._handle_message not found — cannot intercept onPos")
         return
 
-    # Register via the message handler subscription map
-    try:
-        from deebot_client.event_bus import EventBus  # noqa: PLC0415
-        from deebot_client.events import PositionEvent  # noqa: PLC0415
+    def _patched_handle_message(self, message):
+        # Call original first
+        original_fn(self, message)
 
-        def _on_pos_event(event: PositionEvent) -> None:
-            global _GLOBAL_MOWER_HEADING, _GLOBAL_TRACE_STORE
-            try:
-                x = getattr(event, 'x', None) or getattr(event, 'deebot_x', None)
-                y = getattr(event, 'y', None) or getattr(event, 'deebot_y', None)
-                a = getattr(event, 'a', None) or getattr(event, 'angle', 0)
-                if x is not None and y is not None:
-                    _GLOBAL_MOWER_HEADING = int(a or 0)
-                    _GLOBAL_TRACE_STORE.append((int(x), int(y), int(a or 0)))
-                    # Cap trace at 10000 points to avoid memory issues
+        try:
+            topic = getattr(message, 'topic', '') or ''
+            payload_bytes = getattr(message, 'payload', b'') or b''
+            payload_str = payload_bytes.decode('utf-8') if isinstance(payload_bytes, bytes) else str(payload_bytes)
+
+            if '/onPos/' in topic:
+                data = _json.loads(payload_str).get('body', {}).get('data', {})
+                pos = data.get('deebotPos', {})
+                x, y, a = pos.get('x'), pos.get('y'), pos.get('a', 0)
+                invalid = pos.get('invalid', 0)
+                if x is not None and y is not None and not invalid:
+                    global _GLOBAL_MOWER_HEADING, _GLOBAL_TRACE_STORE
+                    _GLOBAL_MOWER_HEADING = int(a)
+                    _GLOBAL_TRACE_STORE.append((int(x), int(y), int(a)))
                     if len(_GLOBAL_TRACE_STORE) > 10000:
                         _GLOBAL_TRACE_STORE = _GLOBAL_TRACE_STORE[-10000:]
-            except Exception:
-                pass
 
-        # Store for use in __init__.py when setting up device
-        _POS_EVENT_HANDLER = _on_pos_event
-        _LOGGER.debug("onPos event handler prepared")
-    except ImportError:
-        pass
+            elif '/onCleanInfo/' in topic:
+                data = _json.loads(payload_str).get('body', {}).get('data', {})
+                c = data.get('cleanState', {}).get('content', {})
+                if c.get('type') == 'spotArea':
+                    zone_id = c.get('value')
+                    global _GLOBAL_ACTIVE_ZONE
+                    if zone_id != _GLOBAL_ACTIVE_ZONE:
+                        _LOGGER.warning("Zone mow: %s (was %s) — clearing trace", zone_id, _GLOBAL_ACTIVE_ZONE)
+                        _GLOBAL_ACTIVE_ZONE = zone_id
+                        _GLOBAL_TRACE_STORE = []
+
+            elif '/onMapTrace/' in topic:
+                _handle_map_trace_chunk(payload_str)
+
+        except Exception:
+            pass
+
+    MqttClient._handle_message = _patched_handle_message
+    _LOGGER.warning("onPos/onCleanInfo/onMapTrace MQTT interceptor registered")
+
+
+# Chunk buffer for onMapTrace (same pattern as onMI/onArI)
+_TRACE_CHUNK_BUFFER: dict[str, dict[int, bytes]] = {}
+_TRACE_CHUNK_COUNTS: dict[str, int] = {}
+
+
+def _handle_map_trace_chunk(payload_str: str) -> None:
+    """Handle a single onMapTrace chunk and store trace polygons when complete."""
+    import json as _json, base64 as _b64, lzma as _lzma, struct as _struct
+    from collections import defaultdict
+
+    try:
+        data = _json.loads(payload_str).get('body', {}).get('data', {})
+        batid = data.get('batid')
+        serial = int(data.get('serial', 0))
+        index = int(data.get('index', 0))
+        info = data.get('info', '')
+        if not batid or not info:
+            return
+
+        if batid not in _TRACE_CHUNK_BUFFER:
+            _TRACE_CHUNK_BUFFER[batid] = {}
+        _TRACE_CHUNK_BUFFER[batid][index] = _b64.b64decode(info)
+        _TRACE_CHUNK_COUNTS[batid] = serial
+
+        if len(_TRACE_CHUNK_BUFFER[batid]) < serial:
+            return  # Not all chunks yet
+
+        # Reassemble and decode
+        all_raw = b"".join(_TRACE_CHUNK_BUFFER[batid][i] for i in range(serial))
+        lzma_header = all_raw[0:5]
+        total_len = _struct.unpack('<I', all_raw[5:9])[0]
+        filter_props = _lzma._decode_filter_properties(_lzma.FILTER_LZMA1, lzma_header)
+        dec = _lzma.LZMADecompressor(_lzma.FORMAT_RAW, None, [filter_props])
+        entries = _json.loads(dec.decompress(all_raw[9:], total_len))
+
+        # Parse trace polygons — format same as onMI zone entries
+        new_traces = []
+        for entry in entries:
+            if not isinstance(entry, list) or len(entry) < 2:
+                continue
+            # entry[0] is type (1=main trace, 2=obstacle path, 3=end marker)
+            trace_type = str(entry[0])
+            if trace_type == '3':
+                continue  # end marker
+            for field in entry[1:]:
+                if not isinstance(field, str) or ',' not in field:
+                    continue
+                parts = field.split(';')
+                coords = [p for p in parts[1:] if ',' in p]
+                if len(coords) >= 2:
+                    new_traces.append(';'.join(coords))
+
+        if new_traces:
+            global _GLOBAL_TRACE_STORE
+            # Store as coordinate strings (replace onPos-based trace)
+            _GLOBAL_TRACE_STORE_SVG = new_traces
+            _LOGGER.warning("onMapTrace: %d trace polygons stored (batid=%s)", len(new_traces), batid)
+            # Also emit MapChangedEvent so image refreshes
+            _TRACE_CHUNK_BUFFER.pop(batid, None)
+            _TRACE_CHUNK_COUNTS.pop(batid, None)
+
+    except Exception as e:
+        _LOGGER.debug("onMapTrace chunk error: %s", e)
 
 
 def _register_pos_handler_for_device(event_bus) -> None:
-    """Register position event handler on a device's event bus."""
-    global _GLOBAL_MOWER_HEADING, _GLOBAL_TRACE_STORE
-    try:
-        from deebot_client.events import PositionEvent  # noqa: PLC0415
-
-        def _on_pos(event: PositionEvent) -> None:
-            global _GLOBAL_MOWER_HEADING
-            try:
-                # PositionEvent has deebot_position with x, y, a
-                pos = getattr(event, 'deebot_position', None)
-                if pos is None:
-                    return
-                x = getattr(pos, 'x', None)
-                y = getattr(pos, 'y', None)
-                a = getattr(pos, 'a', 0)
-                invalid = getattr(pos, 'invalid', False)
-                if x is not None and y is not None and not invalid:
-                    _GLOBAL_MOWER_HEADING = int(a or 0)
-                    _GLOBAL_TRACE_STORE.append((int(x), int(y), int(a or 0)))
-                    if len(_GLOBAL_TRACE_STORE) > 10000:
-                        _GLOBAL_TRACE_STORE = _GLOBAL_TRACE_STORE[-10000:]
-            except Exception as e:
-                _LOGGER.debug("onPos handler error: %s", e)
-
-        event_bus.subscribe(PositionEvent, _on_pos)
-        _LOGGER.warning("onPos handler registered — live trace accumulation active")
-    except Exception as e:
-        _LOGGER.warning("Could not register onPos handler: %s", e)
+    """No-op: onPos handled via MQTT interception."""
+    pass
 
 
 def _patch_on_clean_info_handler() -> None:
-    """Patch to capture onCleanInfo for active zone tracking."""
-    pass  # Handled via event subscription in controller setup
+    """No-op: onCleanInfo handled via MQTT interception."""
+    pass
 
 
 def _on_clean_info_for_device(event_bus) -> None:
-    """Register CleanInfoEvent handler to track active zone and clear trace on new mow."""
-    global _GLOBAL_ACTIVE_ZONE, _GLOBAL_TRACE_STORE
-    try:
-        from deebot_client.events import CleanInfoEvent  # noqa: PLC0415
-
-        def _on_clean(event: CleanInfoEvent) -> None:
-            global _GLOBAL_ACTIVE_ZONE, _GLOBAL_TRACE_STORE
-            try:
-                # Extract zone being mowed from event
-                content = getattr(event, 'content', None)
-                if content and getattr(content, 'type', None) == 'spotArea':
-                    zone_id = getattr(content, 'value', None)
-                    if zone_id != _GLOBAL_ACTIVE_ZONE:
-                        # New zone started — clear old trace
-                        _LOGGER.warning("New mow zone: %s (was %s) — clearing trace", zone_id, _GLOBAL_ACTIVE_ZONE)
-                        _GLOBAL_ACTIVE_ZONE = zone_id
-                        _GLOBAL_TRACE_STORE = []
-            except Exception as e:
-                _LOGGER.debug("onCleanInfo handler error: %s", e)
-
-        event_bus.subscribe(CleanInfoEvent, _on_clean)
-        _LOGGER.warning("onCleanInfo handler registered — active zone tracking active")
-    except Exception as e:
-        _LOGGER.warning("Could not register onCleanInfo handler: %s", e)
+    """No-op: onCleanInfo handled via MQTT interception."""
+    pass
 
 
 def apply_patches() -> None:
@@ -662,7 +696,8 @@ def get_dock_store(mid: str = "1") -> list[tuple[int, int]]:
 # ── Live mow trace store ─────────────────────────────────────────────────────
 # Accumulates onPos positions during active mow, cleared on new mow start
 # Format: [(x, y, heading_degrees)]
-_GLOBAL_TRACE_STORE: list[tuple[int, int, int]] = []
+_GLOBAL_TRACE_STORE: list[tuple[int, int, int]] = []  # onPos positions (fallback)
+_GLOBAL_TRACE_STORE_SVG: list[str] = []              # onMapTrace coord strings (preferred)
 _GLOBAL_MOWER_HEADING: int = 0
 _GLOBAL_ACTIVE_ZONE: str | None = None
 
@@ -676,9 +711,13 @@ def get_mower_heading() -> int:
 def get_active_zone() -> str | None:
     return _GLOBAL_ACTIVE_ZONE
 
+def get_trace_store_svg() -> list[str]:
+    return _GLOBAL_TRACE_STORE_SVG
+
 def clear_trace_store() -> None:
-    global _GLOBAL_TRACE_STORE
+    global _GLOBAL_TRACE_STORE, _GLOBAL_TRACE_STORE_SVG
     _GLOBAL_TRACE_STORE = []
+    _GLOBAL_TRACE_STORE_SVG = []
 
 def update_zone_store(mid: str, zone_id: int, coordinates: str) -> None:
     if mid not in _GLOBAL_ZONE_STORE:

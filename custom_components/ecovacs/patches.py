@@ -12,6 +12,104 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 
+def _patch_on_pos_handler() -> None:
+    """Register onPos MQTT handler to capture live mower position and heading."""
+    from deebot_client.mqtt_client import MqttClient  # noqa: PLC0415
+
+    original_handle = getattr(MqttClient, '_handle_message', None)
+    if original_handle is None:
+        return
+
+    # Register via the message handler subscription map
+    try:
+        from deebot_client.event_bus import EventBus  # noqa: PLC0415
+        from deebot_client.events import PositionEvent  # noqa: PLC0415
+
+        def _on_pos_event(event: PositionEvent) -> None:
+            global _GLOBAL_MOWER_HEADING, _GLOBAL_TRACE_STORE
+            try:
+                x = getattr(event, 'x', None) or getattr(event, 'deebot_x', None)
+                y = getattr(event, 'y', None) or getattr(event, 'deebot_y', None)
+                a = getattr(event, 'a', None) or getattr(event, 'angle', 0)
+                if x is not None and y is not None:
+                    _GLOBAL_MOWER_HEADING = int(a or 0)
+                    _GLOBAL_TRACE_STORE.append((int(x), int(y), int(a or 0)))
+                    # Cap trace at 10000 points to avoid memory issues
+                    if len(_GLOBAL_TRACE_STORE) > 10000:
+                        _GLOBAL_TRACE_STORE = _GLOBAL_TRACE_STORE[-10000:]
+            except Exception:
+                pass
+
+        # Store for use in __init__.py when setting up device
+        _POS_EVENT_HANDLER = _on_pos_event
+        _LOGGER.debug("onPos event handler prepared")
+    except ImportError:
+        pass
+
+
+def _register_pos_handler_for_device(event_bus) -> None:
+    """Register position event handler on a device's event bus."""
+    global _GLOBAL_MOWER_HEADING, _GLOBAL_TRACE_STORE
+    try:
+        from deebot_client.events import PositionEvent  # noqa: PLC0415
+
+        def _on_pos(event: PositionEvent) -> None:
+            global _GLOBAL_MOWER_HEADING
+            try:
+                # PositionEvent has deebot_position with x, y, a
+                pos = getattr(event, 'deebot_position', None)
+                if pos is None:
+                    return
+                x = getattr(pos, 'x', None)
+                y = getattr(pos, 'y', None)
+                a = getattr(pos, 'a', 0)
+                invalid = getattr(pos, 'invalid', False)
+                if x is not None and y is not None and not invalid:
+                    _GLOBAL_MOWER_HEADING = int(a or 0)
+                    _GLOBAL_TRACE_STORE.append((int(x), int(y), int(a or 0)))
+                    if len(_GLOBAL_TRACE_STORE) > 10000:
+                        _GLOBAL_TRACE_STORE = _GLOBAL_TRACE_STORE[-10000:]
+            except Exception as e:
+                _LOGGER.debug("onPos handler error: %s", e)
+
+        event_bus.subscribe(PositionEvent, _on_pos)
+        _LOGGER.warning("onPos handler registered — live trace accumulation active")
+    except Exception as e:
+        _LOGGER.warning("Could not register onPos handler: %s", e)
+
+
+def _patch_on_clean_info_handler() -> None:
+    """Patch to capture onCleanInfo for active zone tracking."""
+    pass  # Handled via event subscription in controller setup
+
+
+def _on_clean_info_for_device(event_bus) -> None:
+    """Register CleanInfoEvent handler to track active zone and clear trace on new mow."""
+    global _GLOBAL_ACTIVE_ZONE, _GLOBAL_TRACE_STORE
+    try:
+        from deebot_client.events import CleanInfoEvent  # noqa: PLC0415
+
+        def _on_clean(event: CleanInfoEvent) -> None:
+            global _GLOBAL_ACTIVE_ZONE, _GLOBAL_TRACE_STORE
+            try:
+                # Extract zone being mowed from event
+                content = getattr(event, 'content', None)
+                if content and getattr(content, 'type', None) == 'spotArea':
+                    zone_id = getattr(content, 'value', None)
+                    if zone_id != _GLOBAL_ACTIVE_ZONE:
+                        # New zone started — clear old trace
+                        _LOGGER.warning("New mow zone: %s (was %s) — clearing trace", zone_id, _GLOBAL_ACTIVE_ZONE)
+                        _GLOBAL_ACTIVE_ZONE = zone_id
+                        _GLOBAL_TRACE_STORE = []
+            except Exception as e:
+                _LOGGER.debug("onCleanInfo handler error: %s", e)
+
+        event_bus.subscribe(CleanInfoEvent, _on_clean)
+        _LOGGER.warning("onCleanInfo handler registered — active zone tracking active")
+    except Exception as e:
+        _LOGGER.warning("Could not register onCleanInfo handler: %s", e)
+
+
 def apply_patches() -> None:
     """Apply all patches to deebot_client."""
     _patch_clean_commands()
@@ -559,6 +657,28 @@ def get_obstacle_store(mid: str = "1") -> list[tuple[int, str]]:
 
 def get_dock_store(mid: str = "1") -> list[tuple[int, int]]:
     return _GLOBAL_DOCK_STORE.get(mid, [])
+
+
+# ── Live mow trace store ─────────────────────────────────────────────────────
+# Accumulates onPos positions during active mow, cleared on new mow start
+# Format: [(x, y, heading_degrees)]
+_GLOBAL_TRACE_STORE: list[tuple[int, int, int]] = []
+_GLOBAL_MOWER_HEADING: int = 0
+_GLOBAL_ACTIVE_ZONE: str | None = None
+
+
+def get_trace_store() -> list[tuple[int, int, int]]:
+    return _GLOBAL_TRACE_STORE
+
+def get_mower_heading() -> int:
+    return _GLOBAL_MOWER_HEADING
+
+def get_active_zone() -> str | None:
+    return _GLOBAL_ACTIVE_ZONE
+
+def clear_trace_store() -> None:
+    global _GLOBAL_TRACE_STORE
+    _GLOBAL_TRACE_STORE = []
 
 def update_zone_store(mid: str, zone_id: int, coordinates: str) -> None:
     if mid not in _GLOBAL_ZONE_STORE:

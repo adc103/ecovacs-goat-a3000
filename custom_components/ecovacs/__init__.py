@@ -178,6 +178,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: EcovacsConfigEntry) -> b
         )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Register live position and clean info handlers for trace/heading
+    try:
+        from custom_components.ecovacs.patches import (  # noqa: PLC0415
+            _register_pos_handler_for_device,
+            _on_clean_info_for_device,
+        )
+        controller = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+        if controller:
+            for device in getattr(controller, 'devices', []):
+                _register_pos_handler_for_device(device.events)
+                _on_clean_info_for_device(device.events)
+    except Exception as err:
+        _LOGGER_INIT.warning("Could not register pos/clean handlers: %s", err)
+
     # Set up Lovelace card after all platforms are ready
     # Run only once (first config entry) to avoid duplicate registration
     if not hass.data.get("ecovacs_card_setup_done"):

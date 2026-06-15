@@ -89,19 +89,27 @@ class EcovacsMap(
             from custom_components.ecovacs.patches import (
                 get_zone_store, get_path_store,
                 get_obstacle_store, get_dock_store,
+                get_trace_store, get_mower_heading,
             )
             mid = "1"
             zone_store     = get_zone_store(mid)
             path_store     = get_path_store(mid)
             obstacle_store = get_obstacle_store(mid)
             dock_store     = get_dock_store(mid)
+            trace_store    = get_trace_store()
+            heading        = get_mower_heading()
             positions      = self._map._map_data._positions
 
             _LOGGER.warning(
-                "image(): zones=%d paths=%d obstacles=%d dock=%s",
+                "image(): zones=%d paths=%d obstacles=%d trace=%d heading=%d",
                 len(zone_store), len(path_store), len(obstacle_store),
-                "yes" if dock_store else "no",
+                len(trace_store), heading,
             )
+
+            # Build trace coordinate string for renderer
+            trace_points = None
+            if trace_store:
+                trace_points = [";".join(f"{x},{y}" for x, y, _ in trace_store)]
 
             svg = render_mower_map_from_store(
                 zone_store,
@@ -109,6 +117,8 @@ class EcovacsMap(
                 path_store=path_store,
                 obstacle_store=obstacle_store,
                 dock_outline_store=dock_store,
+                trace_points=trace_points,
+                mower_heading=heading,
             )
             if svg:
                 _LOGGER.warning("image(): rendered SVG (%d chars)", len(svg))

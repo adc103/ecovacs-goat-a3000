@@ -164,6 +164,7 @@ def render_mower_map_from_store(
     obstacle_store: list[tuple[int, str]] | None = None,
     dock_outline_store: list[tuple[int, int]] | None = None,
     no_go_ids: set[int] | None = None,
+    mower_heading: int = 0,
 ) -> str | None:
     """Render full mower map SVG from all available data stores."""
     if not zone_store and not path_store:

@@ -242,3 +242,105 @@ def render_mower_map(
     )
 
     return svg
+
+
+def render_mower_map_from_store(
+    zone_store: dict[int, str],
+    positions: list[Any] | None = None,
+) -> str | None:
+    """Render mower map from zone_store dict {zone_id: coordinates_str}.
+
+    This is the primary renderer used by the HA image entity.
+    zone_store is populated by the OnMI/onArI MQTT handlers.
+    """
+    if not zone_store:
+        return None
+
+    # Build all coordinate points for bounds calculation
+    all_x: list[int] = []
+    all_y: list[int] = []
+    zone_polygons: dict[int, list[tuple[int, int]]] = {}
+
+    for zone_id, coords_str in zone_store.items():
+        points = _parse_coords(coords_str)
+        if len(points) < 3:
+            continue
+        zone_polygons[zone_id] = points
+        all_x.extend(p[0] for p in points)
+        all_y.extend(p[1] for p in points)
+
+    if not zone_polygons:
+        return None
+
+    # Include dock at origin
+    all_x.append(0)
+    all_y.append(0)
+
+    min_x, max_x = min(all_x), max(all_x)
+    min_y, max_y = min(all_y), max(all_y)
+    span = max(max_x - min_x, max_y - min_y)
+    pad = max(span * 0.05, 1000)
+
+    svg_w = max_x - min_x + pad * 2
+    svg_h = max_y - min_y + pad * 2
+
+    def to_svg(x: int, y: int) -> tuple[float, float]:
+        return (x - min_x + pad, max_y - y + pad)
+
+    def pts_to_poly(points: list[tuple[int, int]]) -> str:
+        return " ".join(f"{sx:.0f},{sy:.0f}" for sx, sy in (to_svg(x, y) for x, y in points))
+
+    elements: list[str] = []
+    stroke_w = max(svg_w, svg_h) * 0.002
+    font_size = max(svg_w, svg_h) * 0.025
+
+    for i, (zone_id, pts) in enumerate(sorted(zone_polygons.items())):
+        fill, stroke = _ZONE_COLORS[i % len(_ZONE_COLORS)]
+        poly = pts_to_poly(pts)
+        elements.append(
+            f'<polygon points="{poly}" '
+            f'fill="{fill}" fill-opacity="0.35" '
+            f'stroke="{stroke}" stroke-width="{stroke_w:.0f}"/>'
+        )
+        svg_pts = [to_svg(x, y) for x, y in pts]
+        cx = sum(p[0] for p in svg_pts) / len(svg_pts)
+        cy = sum(p[1] for p in svg_pts) / len(svg_pts)
+        elements.append(
+            f'<text x="{cx:.0f}" y="{cy:.0f}" '
+            f'text-anchor="middle" dominant-baseline="middle" '
+            f'font-size="{font_size:.0f}" fill="white" '
+            f'font-weight="bold" font-family="sans-serif">'
+            f'Zone {zone_id}</text>'
+        )
+
+    # Dock marker
+    dock_r = max(svg_w, svg_h) * 0.012
+    dx, dy = to_svg(0, 0)
+    elements.append(
+        f'<circle cx="{dx:.0f}" cy="{dy:.0f}" r="{dock_r:.0f}" '
+        f'fill="{_DOCK_COLOR}" stroke="#333" stroke-width="{stroke_w:.0f}"/>'
+    )
+
+    # Mower position
+    if positions:
+        for pos in positions:
+            try:
+                px = getattr(pos, "x", None)
+                py = getattr(pos, "y", None)
+                pos_type = str(getattr(pos, "type", "")).lower()
+                if px is not None and py is not None and "deebot" in pos_type:
+                    sx, sy = to_svg(int(px), int(py))
+                    elements.append(
+                        f'<circle cx="{sx:.0f}" cy="{sy:.0f}" r="{dock_r:.0f}" '
+                        f'fill="#00aaff" stroke="white" stroke-width="{stroke_w:.0f}"/>'
+                    )
+            except Exception:
+                pass
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {svg_w:.0f} {svg_h:.0f}">'
+        f'<rect width="{svg_w:.0f}" height="{svg_h:.0f}" fill="{_BACKGROUND_COLOR}"/>'
+        + "".join(elements)
+        + "</svg>"
+    )

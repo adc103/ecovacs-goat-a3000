@@ -80,24 +80,28 @@ class EcovacsMap(
     def image(self) -> bytes | None:
         """Return bytes of image or None."""
         from deebot_client.capabilities import DeviceType
-        from .map_renderer import render_mower_map
+        from .map_renderer import render_mower_map, render_mower_map_from_store
 
         # For mowers, use our Python renderer which handles polygon zone data
         # The Rust map module returns None for mowers (it's designed for vacuum pixel maps)
         if self._device.capabilities.device_type is DeviceType.MOWER:
-            subsets = list(self._map._map_data.map_subsets.values())
+            # Get zones from our _zone_store (map_data.map_subsets ignores ROOMS type)
+            from custom_components.ecovacs.patches import get_zone_store
+            mid = "1"  # default map ID
+            zone_store = get_zone_store(mid)
             positions = self._map._map_data._positions
             _LOGGER.warning(
-                "image() called: %d subsets in map_data, positions=%s",
-                len(subsets),
+                "image() called: %d zones in store for mid=%s, positions=%s",
+                len(zone_store),
+                mid,
                 [str(p) for p in positions] if positions else "none"
             )
-            svg = render_mower_map(subsets, positions)
+            svg = render_mower_map_from_store(zone_store, positions)
             if svg:
-                _LOGGER.warning("image(): rendered SVG (%d chars) with %d subsets", len(svg), len(subsets))
+                _LOGGER.warning("image(): rendered SVG (%d chars) with %d zones", len(svg), len(zone_store))
                 return svg.encode()
             else:
-                _LOGGER.warning("image(): render_mower_map returned None (no usable zone data)")
+                _LOGGER.warning("image(): render_mower_map_from_store returned None (no zone data yet)")
         else:
             # Vacuum: use Rust map module
             svg = self._map.get_svg_map()

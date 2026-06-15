@@ -419,7 +419,7 @@ def _patch_on_mi_handler() -> None:
                 _LOGGER.warning("onMI: JSON parse failed for batid=%s: %s", batid, e, exc_info=True)
                 return HandlingResult.analyse()
 
-            _LOGGER.warning("onMI: assembled %d zone entries for map %s", len(zones), mid)
+            _LOGGER.warning("onMI: assembled %d zone entries for map %s (batid=%s)", len(zones), mid, batid)
 
             subset_ids: list[int] = []
             for zone in zones:
@@ -440,15 +440,19 @@ def _patch_on_mi_handler() -> None:
                 if not coordinates or len(coord_pairs) < 3:
                     continue
 
-                # Emit with ROOMS type - renderer will handle zone coloring
-                event_bus.notify(MapSubsetEvent(id=zone_id, type=MapSetType.ROOMS, coordinates=coordinates, name=""))
-                _LOGGER.warning("onMI: emitted MapSubsetEvent zone_id=%d coords=%d pts batid=%s", zone_id, len(coord_pairs), batid)
-                if zone_id not in subset_ids:
-                    subset_ids.append(zone_id)
+                # Store in global zone store (map_data.map_subsets ignores ROOMS type)
+                # Keep the polygon with the most points for each zone
+                from custom_components.ecovacs.patches import get_zone_store, update_zone_store
+                existing = get_zone_store(mid).get(zone_id, "")
+                if len(coord_pairs) > (len(existing.split(";")) if existing else 0):
+                    update_zone_store(mid, zone_id, coordinates)
+                    _LOGGER.warning("onMI: stored zone_id=%d coords=%d pts mid=%s batid=%s", zone_id, len(coord_pairs), mid, batid)
+                    if zone_id not in subset_ids:
+                        subset_ids.append(zone_id)
 
             if subset_ids:
-                event_bus.notify(MapSetEvent(MapSetType.ROOMS, subset_ids, mid))
-                _LOGGER.warning("onMI: emitted MapSetEvent zones=%s for batid=%s", subset_ids, batid)
+                from custom_components.ecovacs.patches import get_zone_store, _GLOBAL_ZONE_STORE
+                _LOGGER.warning("onMI: zone store for mid=%s now has zones=%s", mid, list(_GLOBAL_ZONE_STORE.get(mid, {}).keys()))
 
             # Fire MapChangedEvent to trigger image entity refresh
             try:
@@ -488,3 +492,18 @@ async def async_request_map_refresh(device) -> None:
         _LOGGER.warning("Map refresh commands sent - waiting for onMI chunks")
     except Exception as e:
         _LOGGER.warning("Failed to request map refresh: %s", e)
+
+
+# Module-level zone store accessible from image.py
+# This is populated by the OnMI/onArI handlers
+_GLOBAL_ZONE_STORE: dict[str, dict[int, str]] = {}
+
+def get_zone_store(mid: str = "1") -> dict[int, str]:
+    """Get the zone polygon store for a given map ID."""
+    return _GLOBAL_ZONE_STORE.get(mid, {})
+
+def update_zone_store(mid: str, zone_id: int, coordinates: str) -> None:
+    """Update a zone's polygon coordinates in the global store."""
+    if mid not in _GLOBAL_ZONE_STORE:
+        _GLOBAL_ZONE_STORE[mid] = {}
+    _GLOBAL_ZONE_STORE[mid][zone_id] = coordinates

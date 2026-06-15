@@ -40,6 +40,7 @@ class EcovacsMowerCard extends HTMLElement {
     this._refreshTimer = null;
     this._mapLoaded = false;
     this._lastImageState = null;
+    this._lastSvg = null;
     this._zoneIds = [];       // zone IDs parsed from SVG
     this._modalMode = null;   // current modal: 'mode' | 'zone'
     this._selectedZone = null;
@@ -304,6 +305,9 @@ class EcovacsMowerCard extends HTMLElement {
       });
       this._zoneIds.sort((a,b) => a-b);
 
+      // Store SVG for reuse in zone picker modal
+      this._lastSvg = svg;
+
       const blob = new Blob([svg], { type: 'image/svg+xml' });
       const blobUrl = URL.createObjectURL(blob);
       img.onload = () => {
@@ -388,9 +392,13 @@ class EcovacsMowerCard extends HTMLElement {
       </div>
     `;
 
-    // Copy current map image
+    // Create fresh blob from stored SVG (original blob URL is already revoked)
     const bgImg = modal.querySelector('#zoneBgImg');
-    bgImg.src = img.src;
+    if (this._lastSvg) {
+      const blob = new Blob([this._lastSvg], { type: 'image/svg+xml' });
+      bgImg.src = URL.createObjectURL(blob);
+      bgImg.onload = () => URL.revokeObjectURL(bgImg.src);
+    }
 
     modal.querySelector('#zmCancel').addEventListener('click', () => modal.remove());
     modal.querySelector('#zmBack').addEventListener('click', () => { modal.remove(); this._openModeModal(); });

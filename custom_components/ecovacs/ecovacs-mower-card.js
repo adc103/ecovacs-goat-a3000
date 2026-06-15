@@ -168,13 +168,13 @@ class EcovacsMowerCard extends HTMLElement {
         /* ── Zone picker modal ── */
         .zone-modal {
           position: absolute; inset: 0; z-index: 20;
-          background: rgba(0,0,0,0.55);
+          background: rgba(0,0,0,0.45);
           display: flex; flex-direction: column;
         }
         .zone-modal-header {
           display: flex; align-items: center; justify-content: space-between;
           padding: 10px 14px;
-          background: rgba(0,0,0,0.7);
+          background: rgba(0,0,0,0.75);
           color: #fff; font-size: 13px; font-weight: 600;
         }
         .zone-modal-header span { opacity: 0.7; font-weight: 400; }
@@ -184,7 +184,6 @@ class EcovacsMowerCard extends HTMLElement {
         .zone-bubbles-layer {
           position: relative; flex: 1;
         }
-        .zone-bubbles-layer img { width: 100%; height: 100%; object-fit: contain; display: block; opacity: 0.6; }
         .zone-bubble {
           position: absolute;
           transform: translate(-50%, -50%);
@@ -383,22 +382,12 @@ class EcovacsMowerCard extends HTMLElement {
         <div>Select a zone <span>then tap Mow to confirm</span></div>
         <button class="zone-modal-cancel" id="zmCancel">✕</button>
       </div>
-      <div class="zone-bubbles-layer" id="bubblesLayer">
-        <img id="zoneBgImg" alt="" />
-      </div>
+      <div class="zone-bubbles-layer" id="bubblesLayer"></div>
       <div class="zone-modal-footer">
         <button class="btn-back" id="zmBack">← Back</button>
         <button class="btn-confirm" id="zmConfirm" disabled>🌿 Mow Zone</button>
       </div>
     `;
-
-    // Create fresh blob from stored SVG (original blob URL is already revoked)
-    const bgImg = modal.querySelector('#zoneBgImg');
-    if (this._lastSvg) {
-      const blob = new Blob([this._lastSvg], { type: 'image/svg+xml' });
-      bgImg.src = URL.createObjectURL(blob);
-      bgImg.onload = () => URL.revokeObjectURL(bgImg.src);
-    }
 
     modal.querySelector('#zmCancel').addEventListener('click', () => modal.remove());
     modal.querySelector('#zmBack').addEventListener('click', () => { modal.remove(); this._openModeModal(); });
@@ -411,9 +400,8 @@ class EcovacsMowerCard extends HTMLElement {
 
     wrap.appendChild(modal);
 
-    // Wait for bg image to load then place bubbles
-    bgImg.onload = () => this._placeBubbles(modal);
-    if (bgImg.complete) this._placeBubbles(modal);
+    // Place bubbles immediately
+    this._placeBubbles(modal);
   }
 
   _placeBubbles(modal) {

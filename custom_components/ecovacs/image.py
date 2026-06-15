@@ -1,3 +1,4 @@
+import logging
 """Ecovacs image entities."""
 
 from typing import cast
@@ -16,6 +17,9 @@ from . import EcovacsConfigEntry
 from .entity import EcovacsEntity
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: EcovacsConfigEntry,
@@ -23,12 +27,20 @@ async def async_setup_entry(
 ) -> None:
     """Add entities for passed config_entry in HA."""
     controller = config_entry.runtime_data
-    entities = [
-        EcovacsMap(device, caps, hass)
-        for device in controller.devices
-        if (caps := device.capabilities.map)
-    ]
+    _LOGGER.warning("image.py: setting up, %d devices found", len(controller.devices))
+    entities = []
+    for device in controller.devices:
+        caps = device.capabilities.map
+        _LOGGER.warning("image.py: device %s has map capability: %s", 
+                       device.device_info.get("nick"), caps is not None)
+        if caps:
+            if device.map is None:
+                _LOGGER.warning("image.py: device.map is None despite map capability!")
+            else:
+                _LOGGER.warning("image.py: creating EcovacsMap entity")
+                entities.append(EcovacsMap(device, caps, hass))
 
+    _LOGGER.warning("image.py: creating %d map entities", len(entities))
     if entities:
         async_add_entities(entities)
 

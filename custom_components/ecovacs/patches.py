@@ -370,7 +370,7 @@ def _patch_on_mi_handler() -> None:
             index = int(data.get("index", 0))
             mid = str(data.get("mid", "1"))
             info = data.get("info", "")
-            total_chunks = serial + 1
+            total_chunks = serial  # serial IS the total count, indices run 0 to serial-1
 
             if not info or not batid:
                 return HandlingResult.analyse()

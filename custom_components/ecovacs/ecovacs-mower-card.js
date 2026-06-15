@@ -12,9 +12,9 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.2.1';
+const CARD_VERSION = '2.2.2';
 
-const _MOWER_COLOR = '#00aaff';
+const _MOWER_COLOR = '#00aaff';  // must match map_renderer.py _MOWER_COLOR
 
 const ZONE_COLORS = {
   2: '#2dcc5a',
@@ -361,7 +361,6 @@ class EcovacsMowerCard extends HTMLElement {
         this._zoneIds.push(id);
       });
       this._zoneIds.sort((a, b) => a - b);
-      console.log('ecovacs-mower-card: zones found', this._zoneIds, this._zoneCentroids);
 
       // Store SVG for reuse in zone picker modal
       this._lastSvg = svg;
@@ -527,10 +526,11 @@ class EcovacsMowerCard extends HTMLElement {
     const vbW = vb[2] || 1;
     const vbH = vb[3] || 1;
 
-    // Find mower circle (blue fill)
-    const mowerCircle = [...svgDoc.querySelectorAll('circle')].find(c =>
-      c.getAttribute('fill') === '#00aaff' || c.getAttribute('fill') === _MOWER_COLOR
-    );
+    // Find mower circle - has fill="#00aaff" and a stroke attribute
+    const mowerCircle = [...svgDoc.querySelectorAll('circle')].find(c => {
+      const fill = c.getAttribute('fill');
+      return fill === '#00aaff' || fill === _MOWER_COLOR;
+    });
 
     overlay.innerHTML = '';
 

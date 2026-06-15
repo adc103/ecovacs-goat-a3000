@@ -172,11 +172,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: EcovacsConfigEntry) -> b
             _register_pos_handler_for_device,
             _on_clean_info_for_device,
         )
-        controller = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-        if controller:
-            for device in getattr(controller, 'devices', []):
-                _register_pos_handler_for_device(device.events)
-                _on_clean_info_for_device(device.events)
+        # Controller is stored as entry.runtime_data
+        ctrl = entry.runtime_data
+        for device in getattr(ctrl, 'devices', []):
+            _register_pos_handler_for_device(device.events)
+            _on_clean_info_for_device(device.events)
+            _LOGGER_INIT.warning("Registered pos/clean handlers for device: %s", getattr(device, 'device_id', '?'))
     except Exception as err:
         _LOGGER_INIT.warning("Could not register pos/clean handlers: %s", err)
 

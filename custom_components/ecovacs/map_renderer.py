@@ -35,7 +35,7 @@ _NO_GO_FILL       = "#e8743a"   # orange (matches app no-go color)
 _NO_GO_STROKE     = "#cc5520"
 _OBSTACLE_STROKE  = "#8B6914"   # subtle brown
 _DOCK_COLOR       = "#ffe605"
-_MOWER_COLOR      = "#1a7bd4"
+_MOWER_COLOR      = "#00aaff"
 _BACKGROUND       = "#c8d8c0"   # light grey-green background (like app)
 
 # Different green tones for multiple zones

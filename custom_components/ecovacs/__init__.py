@@ -82,7 +82,19 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         _LOGGER_INIT.warning("Could not copy card JS to www/: %s", err)
         return
 
-    # Check if already registered (look in Lovelace storage)
+    # Build versioned URL to bust browser cache on every update
+    import json as _json
+    try:
+        _manifest = _json.loads(
+            (pathlib.Path(__file__).parent / "manifest.json").read_text()
+        )
+        version = _manifest.get("version", "1").replace(".", "_")
+    except Exception:
+        version = "1"
+    card_url = f"/local/{_CARD_FILENAME}?v={version}"
+
+    # Remove any old resource entries for this card (different URL = old version)
+    # Then register the current versioned URL
     already_registered = False
     try:
         from homeassistant.components.lovelace.resources import ResourceStorageCollection  # noqa: PLC0415
@@ -90,27 +102,36 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         resources: ResourceStorageCollection | None = getattr(lovelace, "resources", None)
         if resources is not None:
             await resources.async_load()
-            urls = [r.get("url", "") for r in resources.async_items()]
-            already_registered = any("ecovacs-mower-card" in u for u in urls)
+            items = list(resources.async_items())
+            # Remove stale entries for this card
+            for item in items:
+                if "ecovacs-mower-card" in item.get("url", ""):
+                    if item["url"] != card_url:
+                        try:
+                            await resources.async_delete_item(item["id"])
+                            _LOGGER_INIT.warning("Removed stale resource: %s", item["url"])
+                        except Exception:
+                            pass
+                    else:
+                        already_registered = True
+
             if not already_registered:
-                await resources.async_create_item({"res_type": "module", "url": _CARD_URL})
-                already_registered = True
+                await resources.async_create_item({"res_type": "module", "url": card_url})
                 _LOGGER_INIT.warning(
-                    "Ecovacs mower card auto-registered as Lovelace resource (%s). "
-                    "Hard-refresh your browser (Ctrl+Shift+R).", _CARD_URL
+                    "Ecovacs mower card registered: %s — hard-refresh browser (Ctrl+Shift+R)",
+                    card_url,
                 )
+                already_registered = True
     except Exception as err:
         _LOGGER_INIT.warning("Lovelace auto-registration failed: %s", err)
 
     if already_registered:
         return
 
-    # Could not auto-register — send persistent notification
-    # This only fires once (notification_id prevents duplicates)
+    # Fallback notification
     _LOGGER_INIT.warning(
-        "ACTION REQUIRED: Add Lovelace resource manually — "
-        "Settings → Dashboards → ⋮ → Resources → + Add Resource → "
-        "URL: %s, Type: JavaScript module", _CARD_URL
+        "ACTION REQUIRED: Add manually — Settings → Dashboards → ⋮ → Resources → "
+        "+ Add Resource → URL: %s, Type: JavaScript module", card_url
     )
     try:
         from homeassistant.components.persistent_notification import async_create  # noqa: PLC0415
@@ -120,9 +141,9 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
             message=(
                 "Add the mower map card as a Lovelace resource (one-time only):\n\n"
                 "**Settings → Dashboards → ⋮ → Resources → + Add Resource**\n\n"
-                f"URL: `{_CARD_URL}`\n"
+                f"URL: `{card_url}`\n"
                 "Type: **JavaScript module**\n\n"
-                "Then hard-refresh your browser (Ctrl+Shift+R) and dismiss this notification."
+                "Then hard-refresh your browser (Ctrl+Shift+R)."
             ),
             notification_id=_NOTIFICATION_ID,
         )

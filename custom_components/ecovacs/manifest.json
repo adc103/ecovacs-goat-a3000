@@ -19,5 +19,5 @@
                          "py-sucks==0.9.11",
                          "deebot-client==18.3.0"
                      ],
-    "version":  "0.1.9"
+    "version":  "0.2.0"
 }

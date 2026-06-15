@@ -60,12 +60,17 @@ class EcovacsMap(
         hass: HomeAssistant,
     ) -> None:
         """Initialize entity."""
-        # Must call ImageEntity.__init__ explicitly to set up HTTP client
+        # ImageEntity.__init__ does not call super().__init__() so we must
+        # call both parent inits explicitly to avoid breaking the MRO chain
         ImageEntity.__init__(self, hass)
-        # Then call EcovacsEntity.__init__ (skipping Entity.__init__ via super chain)
-        EcovacsEntity.__init__(self, device, capability)
+        self._attr_unique_id = f"{device.device_info['did']}_{self.entity_description.key}"
+        self._device = device
+        self._capability = capability
+        self._subscribed_events: set = set()
         self._attr_extra_state_attributes = {}
         self._map = cast(Map, self._device.map)
+        self._attr_has_entity_name = True
+        self._attr_should_poll = False
 
     entity_description = EntityDescription(
         key="map",

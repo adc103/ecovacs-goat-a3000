@@ -354,16 +354,13 @@ def _patch_on_mi_handler() -> None:
     _chunk_buffer: dict[str, dict[int, bytes]] = defaultdict(dict)
     _chunk_counts: dict[str, int] = {}
 
-    def _decompress_lzma_b64(b64_data: str) -> bytes:
-        data = base64.b64decode(b64_data)
-        lzma_header = data[0:5]
-        len_value = struct.unpack("<I", data[5:9])[0]
-        filter_props = lzma._decode_filter_properties(lzma.FILTER_LZMA1, lzma_header)
-        dec = lzma.LZMADecompressor(lzma.FORMAT_RAW, None, [filter_props])
-        return dec.decompress(data[9:], len_value)
-
     class OnMI(MessageBodyDataDict):
-        """Handler for onMI GOAT mower map chunk messages."""
+        """Handler for onMI GOAT mower map chunk messages.
+        
+        The LZMA header + uncompressed length is only in chunk 0 (bytes 0-8).
+        Chunks 1+ contain raw continuation compressed data with no header.
+        All raw compressed bytes must be concatenated before decompressing.
+        """
         NAME = "onMI"
 
         @classmethod
@@ -379,12 +376,12 @@ def _patch_on_mi_handler() -> None:
                 return HandlingResult.analyse()
 
             try:
-                chunk = _decompress_lzma_b64(info)
+                raw = base64.b64decode(info)
             except Exception:
-                _LOGGER.warning("Failed to decompress onMI chunk %d for batid=%s", index, batid)
+                _LOGGER.warning("Failed to base64-decode onMI chunk %d for batid=%s", index, batid)
                 return HandlingResult.analyse()
 
-            _chunk_buffer[batid][index] = chunk
+            _chunk_buffer[batid][index] = raw
             _chunk_counts[batid] = total_chunks
 
             _LOGGER.debug("onMI chunk %d/%d (batid=%s, map=%s)", index + 1, total_chunks, batid, mid)
@@ -393,12 +390,25 @@ def _patch_on_mi_handler() -> None:
                 return HandlingResult.success()
 
             try:
-                full_bytes = b"".join(_chunk_buffer[batid][i] for i in range(total_chunks))
+                all_raw = b"".join(_chunk_buffer[batid][i] for i in range(total_chunks))
             except KeyError:
                 return HandlingResult.analyse()
             finally:
                 del _chunk_buffer[batid]
                 _chunk_counts.pop(batid, None)
+
+            # Chunk 0 has the LZMA header (5 bytes) + uncompressed length (4 bytes)
+            # Chunks 1+ are raw continuation compressed data
+            try:
+                lzma_header = all_raw[0:5]
+                total_len = struct.unpack("<I", all_raw[5:9])[0]
+                compressed = all_raw[9:]  # all compressed data concatenated
+                filter_props = lzma._decode_filter_properties(lzma.FILTER_LZMA1, lzma_header)
+                dec = lzma.LZMADecompressor(lzma.FORMAT_RAW, None, [filter_props])
+                full_bytes = dec.decompress(compressed, total_len)
+            except Exception:
+                _LOGGER.warning("Failed to decompress reassembled onMI data for map %s", mid)
+                return HandlingResult.analyse()
 
             try:
                 zones = orjson.loads(full_bytes)

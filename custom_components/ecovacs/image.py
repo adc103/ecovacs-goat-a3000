@@ -111,11 +111,13 @@ class EcovacsMap(
                     self._attr_extra_state_attributes["map_name"] = map_obj.name
 
         async def on_changed(event: MapChangedEvent) -> None:
+            _LOGGER.warning("MapChangedEvent received in image entity - updating image")
             self._attr_image_last_updated = event.when
             self.async_write_ha_state()
 
         self._subscribe(self._capability.cached_info.event, on_info)
         self._subscribe(self._capability.changed.event, on_changed)
+        _LOGGER.warning("Image entity subscribed to MapChangedEvent successfully")
 
     async def async_update(self) -> None:
         """Update the entity.

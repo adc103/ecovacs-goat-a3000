@@ -1,43 +1,34 @@
 /**
  * Ecovacs GOAT A3000 LiDAR — Mower Map Card
- *
- * A custom Lovelace card that renders the live mower map with:
- *  - Tappable zone polygons → calls ecovacs.mow_zone service
- *  - Live mower position (auto-refreshes during mowing)
- *  - Current job status overlay
- *  - Start / Pause / Return controls
- *
- * Install via HACS or copy to /config/www/ecovacs-mower-card.js
- * Then add to resources in Lovelace config:
- *   url: /local/ecovacs-mower-card.js
- *   type: module
+ * Lovelace custom card for Home Assistant
  *
  * Card config:
  *   type: custom:ecovacs-mower-card
- *   entity: lawn_mower.mower_og        # lawn mower entity
- *   image_entity: image.mower_og_map   # map image entity
- *   camera_entity: camera.mower_og     # optional, for video stream
- *   refresh_interval: 5                # seconds, default 5
+ *   entity: lawn_mower.mower_og
+ *   image_entity: image.mower_og
+ *   refresh_interval: 5
+ *   zone_names:
+ *     2: Front Lawn
+ *     3: Back Lawn
  */
 
-const CARD_VERSION = '1.0.0';
+const CARD_VERSION = '2.0.0';
 
-// Zone ID → display name mapping (override in card config)
-const DEFAULT_ZONE_NAMES = {
-  1: 'No-Go Zone',
-  2: 'Zone 2',
-  3: 'Zone 3',
-  4: 'Zone 4',
-  5: 'Zone 5',
+const ZONE_COLORS = {
+  2: '#2dcc5a',
+  3: '#4a9eff',
+  4: '#8a5eff',
+  5: '#2dccaa',
+  6: '#ccaa2d',
 };
 
 const MOWER_STATES = {
-  mowing: { label: 'Mowing', color: '#4aff7b', icon: '🌿' },
-  docked: { label: 'Docked', color: '#ffe605', icon: '⚡' },
-  paused: { label: 'Paused', color: '#ff9f4a', icon: '⏸' },
+  mowing:    { label: 'Mowing',    color: '#4aff7b', icon: '🌿' },
+  docked:    { label: 'Docked',    color: '#ffe605', icon: '⚡' },
+  paused:    { label: 'Paused',    color: '#ff9f4a', icon: '⏸'  },
   returning: { label: 'Returning', color: '#4a9eff', icon: '🏠' },
-  error: { label: 'Error', color: '#ff4444', icon: '⚠️' },
-  idle: { label: 'Idle', color: '#aaaaaa', icon: '💤' },
+  error:     { label: 'Error',     color: '#ff4444', icon: '⚠️' },
+  idle:      { label: 'Idle',      color: '#aaaaaa', icon: '💤' },
 };
 
 class EcovacsMowerCard extends HTMLElement {
@@ -47,659 +38,514 @@ class EcovacsMowerCard extends HTMLElement {
     this._config = {};
     this._hass = null;
     this._refreshTimer = null;
-    this._svgDoc = null;
-    this._zoneElements = new Map(); // zone_id -> SVG element
-    this._lastImageUrl = null;
-    this._selectedZone = null;
     this._mapLoaded = false;
-  }
-
-  // ── Card registration ────────────────────────────────────────────────────
-
-  static getConfigElement() {
-    return document.createElement('ecovacs-mower-card-editor');
+    this._lastImageState = null;
+    this._zoneIds = [];       // zone IDs parsed from SVG
+    this._modalMode = null;   // current modal: 'mode' | 'zone'
+    this._selectedZone = null;
+    this._selectedMode = null;
   }
 
   static getStubConfig() {
-    return {
-      entity: 'lawn_mower.mower_og',
-      image_entity: 'image.mower_og_map',
-    };
+    return { entity: 'lawn_mower.mower_og', image_entity: 'image.mower_og' };
   }
 
-  getCardSize() {
-    return 6;
-  }
-
-  // ── Config ───────────────────────────────────────────────────────────────
+  getCardSize() { return 7; }
 
   setConfig(config) {
-    if (!config.entity) throw new Error('ecovacs-mower-card: entity is required');
-    if (!config.image_entity) throw new Error('ecovacs-mower-card: image_entity is required');
+    if (!config.entity) throw new Error('ecovacs-mower-card: entity required');
+    if (!config.image_entity) throw new Error('ecovacs-mower-card: image_entity required');
     this._config = {
       refresh_interval: 5,
-      zone_names: DEFAULT_ZONE_NAMES,
-      show_obstacles: true,
-      show_zone_buttons: true,
+      zone_names: {},
       ...config,
-      zone_names: { ...DEFAULT_ZONE_NAMES, ...(config.zone_names || {}) },
     };
     this._render();
   }
 
-  // ── HASS updates ─────────────────────────────────────────────────────────
-
   set hass(hass) {
-    const prev = this._hass;
     this._hass = hass;
-
-    if (!this.shadowRoot.querySelector('.card')) {
-      this._render();
-      return;
-    }
-
-    // Update status bar on every hass change
+    if (!this.shadowRoot.querySelector('.card')) { this._render(); return; }
     this._updateStatusBar();
-
-    // Refresh map image if state changed or mowing
-    const imgState = hass.states[this._config.image_entity];
-    const mowerState = hass.states[this._config.entity];
-    const isMowing = mowerState?.state === 'mowing';
-
-    const newUrl = imgState ? this._buildImageUrl(imgState) : null;
-    if (newUrl && newUrl !== this._lastImageUrl) {
-      this._loadSvgMap();
-      this._lastImageUrl = newUrl;
+    const imgState = hass.states[this._config.image_entity]?.state;
+    if (imgState && imgState !== this._lastImageState) {
+      this._lastImageState = imgState;
+      this._loadMap();
     }
-
-    // Start/stop auto-refresh timer based on mowing state
-    if (isMowing && !this._refreshTimer) {
-      this._startRefresh();
-    } else if (!isMowing && this._refreshTimer) {
-      this._stopRefresh();
-    }
+    const mowing = hass.states[this._config.entity]?.state === 'mowing';
+    if (mowing && !this._refreshTimer) this._startRefresh();
+    else if (!mowing && this._refreshTimer) this._stopRefresh();
   }
 
-  // ── Rendering ────────────────────────────────────────────────────────────
+  // ── Render shell ─────────────────────────────────────────────────────────
 
   _render() {
-    const shadow = this.shadowRoot;
-    shadow.innerHTML = `
+    this.shadowRoot.innerHTML = `
       <style>
-        :host {
-          display: block;
-          font-family: var(--paper-font-body1_-_font-family, sans-serif);
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        :host { display: block; font-family: var(--paper-font-body1_-_font-family, sans-serif); }
+
         .card {
           background: var(--ha-card-background, #1c1c1c);
           border-radius: var(--ha-card-border-radius, 12px);
           overflow: hidden;
           box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,0.3));
         }
+
+        /* ── Status bar ── */
         .status-bar {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
+          display: flex; align-items: center; justify-content: space-between;
           padding: 10px 14px;
           background: var(--secondary-background-color, #2a2a2a);
           border-bottom: 1px solid rgba(255,255,255,0.08);
-          min-height: 48px;
+          min-height: 52px;
         }
-        .status-left {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-        }
-        .status-dot {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-          flex-shrink: 0;
-          transition: background 0.3s;
-        }
-        .status-label {
-          font-size: 14px;
-          font-weight: 600;
-          color: var(--primary-text-color, #fff);
-        }
-        .status-meta {
-          font-size: 12px;
-          color: var(--secondary-text-color, #aaa);
-        }
-        .controls {
-          display: flex;
-          gap: 6px;
-        }
+        .status-left { display: flex; align-items: center; gap: 10px; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; transition: background 0.3s; }
+        .status-label { font-size: 14px; font-weight: 600; color: var(--primary-text-color, #fff); }
+        .status-meta  { font-size: 12px; color: var(--secondary-text-color, #aaa); margin-top: 2px; }
+
+        .controls { display: flex; gap: 6px; }
         .btn {
-          border: none;
-          border-radius: 8px;
-          padding: 6px 12px;
-          font-size: 13px;
-          font-weight: 600;
-          cursor: pointer;
+          border: none; border-radius: 8px; padding: 7px 13px;
+          font-size: 13px; font-weight: 600; cursor: pointer;
           transition: opacity 0.15s, transform 0.1s;
-          display: flex;
-          align-items: center;
-          gap: 5px;
+          display: flex; align-items: center; gap: 5px;
         }
         .btn:hover { opacity: 0.85; }
         .btn:active { transform: scale(0.96); }
-        .btn-start  { background: #4aff7b; color: #1a2a1a; }
+        .btn:disabled { opacity: 0.3; cursor: default; transform: none; }
+        .btn-mow    { background: #4aff7b; color: #0a1f0a; }
         .btn-pause  { background: #ff9f4a; color: #2a1a0a; }
         .btn-dock   { background: #4a9eff; color: #0a1a2a; }
-        .btn-stop   { background: #ff4444; color: #fff; }
-        .btn:disabled { opacity: 0.35; cursor: default; }
 
-        .map-container {
-          position: relative;
-          width: 100%;
-          background: #c8d8c0;
-          min-height: 200px;
-          overflow: hidden;
+        /* ── Map ── */
+        .map-wrap {
+          position: relative; width: 100%; background: #c8d8c0;
+          min-height: 200px; overflow: hidden;
         }
-        .map-container img {
-          width: 100%;
-          height: auto;
-          display: block;
-          user-select: none;
-        }
+        .map-wrap img { width: 100%; height: auto; display: block; user-select: none; }
         .map-loading {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: rgba(0,0,0,0.4);
-          color: #fff;
-          font-size: 14px;
-          gap: 8px;
+          position: absolute; inset: 0;
+          display: flex; align-items: center; justify-content: center;
+          background: rgba(0,0,0,0.35); color: #fff; font-size: 14px; gap: 8px;
         }
         .spinner {
-          width: 20px;
-          height: 20px;
-          border: 2px solid rgba(255,255,255,0.3);
-          border-top-color: #fff;
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
+          width: 20px; height: 20px;
+          border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+          border-radius: 50%; animation: spin 0.8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        .svg-overlay {
-          position: absolute;
-          inset: 0;
-          width: 100%;
-          height: 100%;
+        /* ── Mode modal (overlays map) ── */
+        .modal {
+          position: absolute; inset: 0;
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          background: rgba(0,0,0,0.72); gap: 12px; padding: 20px;
+          z-index: 20;
         }
-        .zone-hit-area {
-          cursor: pointer;
-          fill: transparent;
-          stroke: none;
-          transition: fill 0.15s;
+        .modal h3 {
+          color: #fff; font-size: 15px; font-weight: 700;
+          text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 4px;
         }
-        .zone-hit-area:hover {
-          fill: rgba(255, 255, 255, 0.12);
+        .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 320px; }
+        .mode-btn {
+          border: 2px solid rgba(255,255,255,0.2); border-radius: 12px;
+          padding: 14px 10px; background: rgba(255,255,255,0.06);
+          color: #fff; font-size: 13px; font-weight: 600;
+          cursor: pointer; text-align: center; transition: all 0.15s;
+          display: flex; flex-direction: column; align-items: center; gap: 6px;
         }
-        .zone-hit-area.selected {
-          fill: rgba(255, 255, 255, 0.22);
-          stroke: white;
-          stroke-width: 3;
+        .mode-btn:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.5); }
+        .mode-btn .mode-icon { font-size: 26px; }
+        .modal-cancel {
+          border: none; background: transparent; color: rgba(255,255,255,0.5);
+          font-size: 13px; cursor: pointer; margin-top: 4px; padding: 4px 12px;
         }
+        .modal-cancel:hover { color: #fff; }
 
-        .zone-panel {
-          background: var(--secondary-background-color, #2a2a2a);
-          border-top: 1px solid rgba(255,255,255,0.08);
+        /* ── Zone picker modal ── */
+        .zone-modal {
+          position: absolute; inset: 0; z-index: 20;
+          background: rgba(0,0,0,0.55);
+          display: flex; flex-direction: column;
+        }
+        .zone-modal-header {
+          display: flex; align-items: center; justify-content: space-between;
           padding: 10px 14px;
+          background: rgba(0,0,0,0.7);
+          color: #fff; font-size: 13px; font-weight: 600;
         }
-        .zone-panel-title {
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-          color: var(--secondary-text-color, #888);
-          margin-bottom: 8px;
-        }
-        .zone-buttons {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-        }
-        .zone-btn {
-          border: 1px solid rgba(255,255,255,0.15);
-          border-radius: 8px;
-          padding: 5px 11px;
-          font-size: 12px;
-          font-weight: 600;
-          cursor: pointer;
-          background: rgba(255,255,255,0.06);
-          color: var(--primary-text-color, #fff);
-          transition: background 0.15s, border-color 0.15s, transform 0.1s;
-          display: flex;
-          align-items: center;
-          gap: 5px;
-        }
-        .zone-btn:hover {
-          background: rgba(255,255,255,0.14);
-          border-color: rgba(255,255,255,0.35);
-        }
-        .zone-btn:active { transform: scale(0.95); }
-        .zone-btn.active {
-          background: #4aff7b22;
-          border-color: #4aff7b;
-          color: #4aff7b;
-        }
-        .zone-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
+        .zone-modal-header span { opacity: 0.7; font-weight: 400; }
+        .zone-modal-cancel { border: none; background: transparent; color: rgba(255,255,255,0.6); cursor: pointer; font-size: 20px; line-height: 1; }
+        .zone-modal-cancel:hover { color: #fff; }
 
-        .toast {
+        .zone-bubbles-layer {
+          position: relative; flex: 1;
+        }
+        .zone-bubbles-layer img { width: 100%; height: 100%; object-fit: contain; display: block; opacity: 0.6; }
+        .zone-bubble {
           position: absolute;
-          bottom: 60px;
-          left: 50%;
-          transform: translateX(-50%);
-          background: rgba(0,0,0,0.82);
-          color: #fff;
+          transform: translate(-50%, -50%);
+          border-radius: 50px;
           padding: 8px 16px;
-          border-radius: 20px;
-          font-size: 13px;
-          pointer-events: none;
-          opacity: 0;
-          transition: opacity 0.25s;
-          white-space: nowrap;
-          z-index: 10;
+          font-size: 13px; font-weight: 700;
+          cursor: pointer; white-space: nowrap;
+          border: 2px solid rgba(255,255,255,0.3);
+          background: rgba(30,30,30,0.85);
+          color: #fff;
+          transition: all 0.15s;
+          display: flex; align-items: center; gap: 6px;
+        }
+        .zone-bubble:hover { transform: translate(-50%, -50%) scale(1.08); border-color: #fff; }
+        .zone-bubble.selected {
+          border-color: #4aff7b; background: rgba(74,255,123,0.2); color: #4aff7b;
+          transform: translate(-50%, -50%) scale(1.1);
+        }
+        .zone-bubble-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+        .zone-modal-footer {
+          padding: 12px 14px;
+          background: rgba(0,0,0,0.7);
+          display: flex; gap: 10px; align-items: center;
+        }
+        .btn-confirm {
+          flex: 1; border: none; border-radius: 10px;
+          padding: 11px; font-size: 14px; font-weight: 700;
+          background: #4aff7b; color: #0a1f0a; cursor: pointer;
+          transition: opacity 0.15s;
+        }
+        .btn-confirm:disabled { opacity: 0.3; cursor: default; }
+        .btn-confirm:not(:disabled):hover { opacity: 0.85; }
+        .btn-back {
+          border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
+          padding: 11px 16px; font-size: 14px; font-weight: 600;
+          background: transparent; color: #fff; cursor: pointer;
+        }
+        .btn-back:hover { background: rgba(255,255,255,0.08); }
+
+        /* ── Toast ── */
+        .toast {
+          position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+          background: rgba(0,0,0,0.85); color: #fff;
+          padding: 8px 18px; border-radius: 20px; font-size: 13px;
+          pointer-events: none; opacity: 0; transition: opacity 0.25s;
+          white-space: nowrap; z-index: 30;
         }
         .toast.show { opacity: 1; }
       </style>
 
-      <ha-card class="card">
+      <div class="card">
         <div class="status-bar">
           <div class="status-left">
             <div class="status-dot" id="statusDot"></div>
             <div>
               <div class="status-label" id="statusLabel">Loading…</div>
-              <div class="status-meta" id="statusMeta"></div>
+              <div class="status-meta"  id="statusMeta"></div>
             </div>
           </div>
           <div class="controls">
-            <button class="btn btn-start" id="btnStart" title="Start mowing">🌿 Mow</button>
+            <button class="btn btn-mow"   id="btnMow"   title="Start mowing">🌿 Mow</button>
             <button class="btn btn-pause" id="btnPause" title="Pause">⏸</button>
             <button class="btn btn-dock"  id="btnDock"  title="Return to dock">🏠</button>
           </div>
         </div>
 
-        <div class="map-container" id="mapContainer">
+        <div class="map-wrap" id="mapWrap">
           <img id="mapImg" alt="Mower map" />
-          <svg class="svg-overlay" id="svgOverlay" xmlns="http://www.w3.org/2000/svg"></svg>
-          <div class="map-loading" id="mapLoading">
-            <div class="spinner"></div> Loading map…
-          </div>
+          <div class="map-loading" id="mapLoading"><div class="spinner"></div> Loading map…</div>
           <div class="toast" id="toast"></div>
         </div>
-
-        <div class="zone-panel" id="zonePanel" style="display:none">
-          <div class="zone-panel-title">Tap a zone to mow</div>
-          <div class="zone-buttons" id="zoneButtons"></div>
-        </div>
-      </ha-card>
+      </div>
     `;
 
-    // Button listeners
-    this.shadowRoot.getElementById('btnStart').addEventListener('click', () => this._callService('start_mowing'));
-    this.shadowRoot.getElementById('btnPause').addEventListener('click', () => this._callService('pause'));
-    this.shadowRoot.getElementById('btnDock').addEventListener('click',  () => this._callService('dock'));
+    this.shadowRoot.getElementById('btnMow').addEventListener('click',   () => this._openModeModal());
+    this.shadowRoot.getElementById('btnPause').addEventListener('click', () => this._callService('lawn_mower', 'pause'));
+    this.shadowRoot.getElementById('btnDock').addEventListener('click',  () => this._callService('lawn_mower', 'dock'));
 
-    // If hass already set, update
     if (this._hass) {
       this._updateStatusBar();
-      const imgState = this._hass.states[this._config.image_entity];
-      if (imgState) {
-        const url = this._buildImageUrl(imgState);
-        this._loadSvgMap();
-        this._lastImageUrl = url;
-      }
+      setTimeout(() => { if (!this._mapLoaded) this._loadMap(); }, 800);
     }
   }
 
-  // ── Image loading ────────────────────────────────────────────────────────
+  // ── Map loading ───────────────────────────────────────────────────────────
 
-  _buildImageUrl(imgState) {
-    // HA image entities are served via /api/image_proxy/<entity_id>
-    // Authentication uses the long-lived token from the image entity state
-    const token = imgState.attributes.access_token || '';
-    // Cache-bust with the state value so map refreshes when HA updates it
-    const ts = Date.now();
-    return `/api/image_proxy/${imgState.entity_id}?token=${token}&t=${ts}`;
-  }
-
-  async _loadSvgMap() {
-    console.log('ecovacs-mower-card: _loadSvgMap called, hass=', !!this._hass, 'config=', this._config);
+  async _loadMap() {
     const loading = this.shadowRoot.getElementById('mapLoading');
-    const img = this.shadowRoot.getElementById('mapImg');
-    const overlay = this.shadowRoot.getElementById('svgOverlay');
+    const img     = this.shadowRoot.getElementById('mapImg');
+    if (!loading || !img) return;
 
-    loading.style.display = 'flex';
-    loading.innerHTML = '<div class="spinner"></div> Loading map…';
-
-    // Build authenticated URL using the image entity's access token
-    // This is the standard HA pattern for image entities
     const imgState = this._hass?.states[this._config.image_entity];
-    console.log('ecovacs-mower-card: imgState=', imgState?.state, 'entity=', this._config.image_entity);
     if (!imgState) {
-      loading.innerHTML = '⚠️ Image entity not found: ' + this._config.image_entity;
+      loading.innerHTML = `⚠️ Entity not found: ${this._config.image_entity}`;
       return;
     }
 
     const token = imgState.attributes.access_token;
-    if (!token) {
-      loading.innerHTML = '⚠️ No access token on image entity';
-      console.error('ecovacs-mower-card: no access_token, imgState=', imgState);
-      return;
-    }
+    if (!token) { loading.innerHTML = '⚠️ No access token'; return; }
 
-    // HA image proxy URL with access token — no session auth needed
-    const url = `/api/image_proxy/${this._config.image_entity}?token=${token}`;
-    console.debug('ecovacs-mower-card: fetching map from', url);
+    const url = `/api/image_proxy/${this._config.image_entity}?token=${token}&t=${Date.now()}`;
+    loading.style.display = 'flex';
+    loading.innerHTML = '<div class="spinner"></div> Loading map…';
 
     try {
       const resp = await fetch(url);
-      console.debug('ecovacs-mower-card: fetch response', resp.status, resp.headers.get('content-type'));
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} from ${url}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const svg = await resp.text();
+      if (!svg.includes('<svg')) throw new Error('Not SVG');
 
-      const svgText = await resp.text();
-      if (!svgText || !svgText.includes('<svg')) {
-        throw new Error(`Not SVG (got ${svgText.substring(0, 50)})`);
-      }
+      // Parse zone IDs from SVG text elements
+      this._zoneIds = [];
+      const textMatches = [...svg.matchAll(/Zone (\d+)/g)];
+      textMatches.forEach(m => {
+        const id = parseInt(m[1]);
+        if (!this._zoneIds.includes(id)) this._zoneIds.push(id);
+      });
+      this._zoneIds.sort((a,b) => a-b);
 
-      // Parse SVG for zone overlay
-      const parser = new DOMParser();
-      const svgDoc = parser.parseFromString(svgText, 'image/svg+xml');
-      this._svgDoc = svgDoc;
-
-      // Display as blob URL
-      const blob = new Blob([svgText], { type: 'image/svg+xml' });
+      const blob = new Blob([svg], { type: 'image/svg+xml' });
       const blobUrl = URL.createObjectURL(blob);
       img.onload = () => {
         loading.style.display = 'none';
         this._mapLoaded = true;
         URL.revokeObjectURL(blobUrl);
-        this._buildZoneOverlay(svgDoc, overlay);
       };
-      img.onerror = (e) => {
-        console.error('ecovacs-mower-card: img load error', e);
-        loading.style.display = 'none';
-        URL.revokeObjectURL(blobUrl);
-      };
+      img.onerror = () => { loading.style.display = 'none'; URL.revokeObjectURL(blobUrl); };
       img.src = blobUrl;
-
-    } catch (e) {
-      console.error('ecovacs-mower-card: failed to load map', e);
+    } catch(e) {
       loading.innerHTML = `⚠️ ${e.message}`;
-      loading.style.display = 'flex';
+      console.error('ecovacs-mower-card: map load failed', e);
     }
   }
 
-  // ── Zone overlay ─────────────────────────────────────────────────────────
+  // ── Mode modal ────────────────────────────────────────────────────────────
 
-  _buildZoneOverlay(svgDoc, overlay) {
-    overlay.innerHTML = '';
-    this._zoneElements.clear();
+  _openModeModal() {
+    const wrap = this.shadowRoot.getElementById('mapWrap');
+    const existing = wrap.querySelector('.modal');
+    if (existing) existing.remove();
 
-    const rootSvg = svgDoc.querySelector('svg');
-    if (!rootSvg) return;
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = `
+      <h3>Select Mow Mode</h3>
+      <div class="mode-grid">
+        <button class="mode-btn" data-mode="auto">
+          <span class="mode-icon">🤖</span>Auto
+        </button>
+        <button class="mode-btn" data-mode="area">
+          <span class="mode-icon">📍</span>Select Zone
+        </button>
+        <button class="mode-btn" data-mode="edge">
+          <span class="mode-icon">🔲</span>Edge
+        </button>
+        <button class="mode-btn" data-mode="enhanced">
+          <span class="mode-icon">⚡</span>Enhanced
+        </button>
+      </div>
+      <button class="modal-cancel">Cancel</button>
+    `;
 
-    const viewBox = rootSvg.getAttribute('viewBox');
-    if (viewBox) overlay.setAttribute('viewBox', viewBox);
-    overlay.setAttribute('preserveAspectRatio', 'xMidYMid meet');
-
-    // Extract zone polygons from the SVG
-    // Our renderer writes zones with zone labels in adjacent <text> elements
-    // Walk all <polygon> elements and find zone-colored ones
-    const polygons = svgDoc.querySelectorAll('polygon');
-    const texts = Array.from(svgDoc.querySelectorAll('text'));
-
-    // Build zone buttons panel
-    const zoneButtons = this.shadowRoot.getElementById('zoneButtons');
-    const zonePanel = this.shadowRoot.getElementById('zonePanel');
-    zoneButtons.innerHTML = '';
-    const foundZones = new Map(); // zone_id -> {polygon, label}
-
-    const ZONE_COLORS = ['#1a6b3a','#1a4a7a','#4a2a7a','#1a6a5a','#6b5a1a'];
-    const ZONE_STROKES = ['#2dcc5a','#4a9eff','#8a5eff','#2dccaa','#ccaa2d'];
-
-    polygons.forEach(poly => {
-      const fill = poly.getAttribute('fill') || '';
-      const colorIdx = ZONE_COLORS.indexOf(fill);
-      if (colorIdx === -1) return;
-
-      // Find the text label near this polygon's centroid
-      const points = this._parsePolyPoints(poly.getAttribute('points') || '');
-      if (points.length < 3) return;
-      const cx = points.reduce((s, p) => s + p[0], 0) / points.length;
-      const cy = points.reduce((s, p) => s + p[1], 0) / points.length;
-
-      // Find nearest text element
-      let zoneId = colorIdx + 2; // fallback: color index → zone ID
-      let zoneName = this._config.zone_names[zoneId] || `Zone ${zoneId}`;
-
-      const nearText = texts.find(t => {
-        const tx = parseFloat(t.getAttribute('x') || '0');
-        const ty = parseFloat(t.getAttribute('y') || '0');
-        return Math.abs(tx - cx) < 5000 && Math.abs(ty - cy) < 5000 &&
-               t.textContent.startsWith('Zone ');
-      });
-      if (nearText) {
-        const match = nearText.textContent.match(/Zone (\d+)/);
-        if (match) {
-          zoneId = parseInt(match[1]);
-          zoneName = this._config.zone_names[zoneId] || `Zone ${zoneId}`;
+    modal.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        modal.remove();
+        if (mode === 'area') {
+          this._openZoneModal();
+        } else {
+          this._startMode(mode);
         }
+      });
+    });
+    modal.querySelector('.modal-cancel').addEventListener('click', () => modal.remove());
+    wrap.appendChild(modal);
+  }
+
+  // ── Zone picker modal ─────────────────────────────────────────────────────
+
+  _openZoneModal() {
+    const wrap = this.shadowRoot.getElementById('mapWrap');
+    const img  = this.shadowRoot.getElementById('mapImg');
+    const existing = wrap.querySelector('.zone-modal');
+    if (existing) existing.remove();
+
+    this._selectedZone = null;
+
+    const modal = document.createElement('div');
+    modal.className = 'zone-modal';
+    modal.innerHTML = `
+      <div class="zone-modal-header">
+        <div>Select a zone <span>then tap Mow to confirm</span></div>
+        <button class="zone-modal-cancel" id="zmCancel">✕</button>
+      </div>
+      <div class="zone-bubbles-layer" id="bubblesLayer">
+        <img id="zoneBgImg" alt="" />
+      </div>
+      <div class="zone-modal-footer">
+        <button class="btn-back" id="zmBack">← Back</button>
+        <button class="btn-confirm" id="zmConfirm" disabled>🌿 Mow Zone</button>
+      </div>
+    `;
+
+    // Copy current map image
+    const bgImg = modal.querySelector('#zoneBgImg');
+    bgImg.src = img.src;
+
+    modal.querySelector('#zmCancel').addEventListener('click', () => modal.remove());
+    modal.querySelector('#zmBack').addEventListener('click', () => { modal.remove(); this._openModeModal(); });
+    modal.querySelector('#zmConfirm').addEventListener('click', () => {
+      if (this._selectedZone) {
+        modal.remove();
+        this._startZoneMow(this._selectedZone);
       }
-
-      foundZones.set(zoneId, { points, cx, cy, colorIdx });
-
-      // Create hit area in overlay SVG
-      const hitPoly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-      hitPoly.setAttribute('points', poly.getAttribute('points'));
-      hitPoly.setAttribute('class', 'zone-hit-area');
-      hitPoly.setAttribute('data-zone-id', zoneId);
-      hitPoly.addEventListener('click', () => this._onZoneTap(zoneId, zoneName));
-      hitPoly.addEventListener('mouseenter', () => this._showToast(`Tap to mow ${zoneName}`));
-      hitPoly.addEventListener('mouseleave', () => this._hideToast());
-      overlay.appendChild(hitPoly);
-      this._zoneElements.set(zoneId, hitPoly);
     });
 
-    // Build zone button strip
-    if (foundZones.size > 0) {
-      const sortedZones = Array.from(foundZones.entries()).sort(([a], [b]) => a - b);
-      sortedZones.forEach(([zoneId, {colorIdx}]) => {
-        const zoneName = this._config.zone_names[zoneId] || `Zone ${zoneId}`;
-        const color = ZONE_STROKES[colorIdx % ZONE_STROKES.length];
-        const btn = document.createElement('button');
-        btn.className = 'zone-btn';
-        btn.setAttribute('data-zone-id', zoneId);
-        btn.innerHTML = `<span class="zone-dot" style="background:${color}"></span>${zoneName}`;
-        btn.addEventListener('click', () => this._onZoneTap(zoneId, zoneName));
-        zoneButtons.appendChild(btn);
-      });
-      zonePanel.style.display = 'block';
-    }
+    wrap.appendChild(modal);
+
+    // Wait for bg image to load then place bubbles
+    bgImg.onload = () => this._placeBubbles(modal);
+    if (bgImg.complete) this._placeBubbles(modal);
   }
 
-  _parsePolyPoints(pointsStr) {
-    return pointsStr.trim().split(/\s+/).map(p => {
-      const [x, y] = p.split(',').map(Number);
-      return [x, y];
-    }).filter(([x, y]) => !isNaN(x) && !isNaN(y));
-  }
+  _placeBubbles(modal) {
+    const layer  = modal.querySelector('#bubblesLayer');
+    const bgImg  = modal.querySelector('#zoneBgImg');
+    const confirm = modal.querySelector('#zmConfirm');
 
-  // ── Zone tap ─────────────────────────────────────────────────────────────
-
-  _onZoneTap(zoneId, zoneName) {
-    const mowerState = this._hass?.states[this._config.entity]?.state;
-
-    // Deselect if already selected
-    if (this._selectedZone === zoneId) {
-      this._clearZoneSelection();
+    // Compute zone centroids from SVG viewBox vs rendered size
+    // We'll position bubbles evenly since we don't have pixel coordinates
+    // Use a simple vertical stack based on zone Y order
+    const zoneCount = this._zoneIds.length;
+    if (zoneCount === 0) {
+      layer.innerHTML += '<div style="color:white;text-align:center;padding:20px">No zones found</div>';
       return;
     }
 
-    // Clear previous selection
-    this._clearZoneSelection();
-    this._selectedZone = zoneId;
+    const layerH = layer.offsetHeight || 400;
+    const layerW = layer.offsetWidth  || 300;
 
-    // Highlight zone in overlay
-    const hitEl = this._zoneElements.get(zoneId);
-    if (hitEl) hitEl.classList.add('selected');
+    this._zoneIds.forEach((zoneId, i) => {
+      const name  = this._config.zone_names?.[zoneId] || `Zone ${zoneId}`;
+      const color = ZONE_COLORS[zoneId] || '#aaa';
 
-    // Highlight zone button
-    this.shadowRoot.querySelectorAll('.zone-btn').forEach(btn => {
-      btn.classList.toggle('active', parseInt(btn.dataset.zoneId) === zoneId);
+      // Distribute bubbles vertically through the map
+      // Zone 1 (no-go) is skipped
+      const xPct = 50;
+      const yPct = 10 + (i / Math.max(zoneCount - 1, 1)) * 80;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'zone-bubble';
+      bubble.style.left = `${xPct}%`;
+      bubble.style.top  = `${yPct}%`;
+      bubble.innerHTML  = `<span class="zone-bubble-dot" style="background:${color}"></span>${name}`;
+      bubble.dataset.zoneId = zoneId;
+
+      bubble.addEventListener('click', () => {
+        // Deselect all
+        modal.querySelectorAll('.zone-bubble').forEach(b => b.classList.remove('selected'));
+        bubble.classList.add('selected');
+        this._selectedZone = zoneId;
+        confirm.disabled = false;
+        confirm.textContent = `🌿 Mow ${name}`;
+      });
+
+      layer.appendChild(bubble);
     });
-
-    // If mower is idle/docked, confirm and start mowing
-    if (mowerState === 'docked' || mowerState === 'idle') {
-      this._showToast(`Starting ${zoneName}…`);
-      this._callZoneMow(zoneId, zoneName);
-    } else if (mowerState === 'mowing') {
-      // Already mowing — show confirmation toast
-      this._showToast(`Tap again to switch to ${zoneName}`, 3000);
-    } else {
-      this._showToast(`${zoneName} selected`, 2000);
-    }
   }
 
-  _clearZoneSelection() {
-    this._selectedZone = null;
-    this._zoneElements.forEach(el => el.classList.remove('selected'));
-    this.shadowRoot.querySelectorAll('.zone-btn').forEach(btn => btn.classList.remove('active'));
+  // ── Mow actions ───────────────────────────────────────────────────────────
+
+  _startMode(mode) {
+    const actions = {
+      auto:     () => this._callService('lawn_mower', 'start_mowing'),
+      edge:     () => this._callService('ecovacs', 'mow_edge', { entity_id: this._config.entity }),
+      enhanced: () => this._callService('ecovacs', 'mow_enhanced', { entity_id: this._config.entity }),
+    };
+    const labels = { auto: 'Auto mow starting…', edge: 'Edge mow starting…', enhanced: 'Enhanced mow starting…' };
+    this._toast(labels[mode] || 'Starting…');
+    actions[mode]?.();
   }
 
-  _callZoneMow(zoneId, zoneName) {
-    if (!this._hass) return;
+  _startZoneMow(zoneId) {
+    const name = this._config.zone_names?.[zoneId] || `Zone ${zoneId}`;
+    this._toast(`🌿 Starting ${name}…`);
     this._hass.callService('ecovacs', 'mow_zone', {
       entity_id: this._config.entity,
       zone_id: zoneId,
-    }).then(() => {
-      this._showToast(`✅ Mowing ${zoneName}`);
-    }).catch(err => {
-      console.error('ecovacs-mower-card: mow_zone failed', err);
-      this._showToast(`⚠️ Failed to start mow`);
+    }).catch(e => {
+      console.error('ecovacs-mower-card: mow_zone failed', e);
+      this._toast('⚠️ Failed to start zone mow');
     });
   }
 
-  // ── Controls ─────────────────────────────────────────────────────────────
-
-  _callService(action) {
+  _callService(domain, service, data = {}) {
     if (!this._hass) return;
-    const domain = 'lawn_mower';
-    this._hass.callService(domain, action, {
-      entity_id: this._config.entity,
-    }).catch(err => {
-      console.error(`ecovacs-mower-card: ${action} failed`, err);
-      this._showToast(`⚠️ Command failed`);
+    const payload = Object.keys(data).length ? data : { entity_id: this._config.entity };
+    this._hass.callService(domain, service, payload).catch(e => {
+      console.error(`ecovacs-mower-card: ${service} failed`, e);
+      this._toast('⚠️ Command failed');
     });
   }
 
-  // ── Status bar ───────────────────────────────────────────────────────────
+  // ── Status bar ────────────────────────────────────────────────────────────
 
   _updateStatusBar() {
     if (!this._hass) return;
+    const state = this._hass.states[this._config.entity];
+    if (!state) return;
 
-    const mowerState = this._hass.states[this._config.entity];
-    if (!mowerState) return;
+    const info  = MOWER_STATES[state.state] || MOWER_STATES.idle;
+    const attrs = state.attributes;
+    const mowing = state.state === 'mowing';
 
-    const state = mowerState.state;
-    const attrs = mowerState.attributes;
-    const info = MOWER_STATES[state] || MOWER_STATES.idle;
+    this.shadowRoot.getElementById('statusDot').style.background   = info.color;
+    this.shadowRoot.getElementById('statusLabel').textContent       = `${info.icon} ${info.label}`;
 
-    const dot = this.shadowRoot.getElementById('statusDot');
-    const label = this.shadowRoot.getElementById('statusLabel');
-    const meta = this.shadowRoot.getElementById('statusMeta');
-    const btnStart = this.shadowRoot.getElementById('btnStart');
-    const btnPause = this.shadowRoot.getElementById('btnPause');
-    const btnDock  = this.shadowRoot.getElementById('btnDock');
-
-    dot.style.background = info.color;
-    label.textContent = `${info.icon} ${info.label}`;
-
-    // Meta line: battery + area if available
     const parts = [];
     if (attrs.battery_level != null) parts.push(`🔋 ${attrs.battery_level}%`);
     if (attrs.mowed_area)            parts.push(`📐 ${attrs.mowed_area} m²`);
-    meta.textContent = parts.join('  ·  ');
+    this.shadowRoot.getElementById('statusMeta').textContent = parts.join('  ·  ');
 
-    // Button states
-    btnStart.disabled = state === 'mowing';
-    btnPause.disabled = state !== 'mowing';
-    btnDock.disabled  = state === 'docked';
+    this.shadowRoot.getElementById('btnMow').disabled   = mowing;
+    this.shadowRoot.getElementById('btnPause').disabled = !mowing;
+    this.shadowRoot.getElementById('btnDock').disabled  = state.state === 'docked';
   }
 
-  // ── Auto-refresh ─────────────────────────────────────────────────────────
+  // ── Refresh ───────────────────────────────────────────────────────────────
 
   _startRefresh() {
     if (this._refreshTimer) return;
-    const interval = (this._config.refresh_interval || 5) * 1000;
-    this._refreshTimer = setInterval(() => {
-      const imgState = this._hass?.states[this._config.image_entity];
-      if (imgState) {
-        const url = this._buildImageUrl(imgState);
-        this._loadSvgMap();
-        this._lastImageUrl = url;
-      }
-    }, interval);
+    const ms = (this._config.refresh_interval || 5) * 1000;
+    this._refreshTimer = setInterval(() => this._loadMap(), ms);
   }
 
   _stopRefresh() {
-    if (this._refreshTimer) {
-      clearInterval(this._refreshTimer);
-      this._refreshTimer = null;
-    }
+    clearInterval(this._refreshTimer);
+    this._refreshTimer = null;
   }
 
-  // ── Toast ────────────────────────────────────────────────────────────────
+  // ── Toast ─────────────────────────────────────────────────────────────────
 
-  _showToast(msg, duration = 2000) {
-    const toast = this.shadowRoot.getElementById('toast');
-    if (!toast) return;
-    if (this._toastTimer) clearTimeout(this._toastTimer);
-    toast.textContent = msg;
-    toast.classList.add('show');
-    this._toastTimer = setTimeout(() => toast.classList.remove('show'), duration);
+  _toast(msg, ms = 2500) {
+    const t = this.shadowRoot.getElementById('toast');
+    if (!t) return;
+    clearTimeout(this._toastTimer);
+    t.textContent = msg;
+    t.classList.add('show');
+    this._toastTimer = setTimeout(() => t.classList.remove('show'), ms);
   }
-
-  _hideToast() {
-    const toast = this.shadowRoot.getElementById('toast');
-    if (toast) toast.classList.remove('show');
-  }
-
-  // ── Lifecycle ────────────────────────────────────────────────────────────
 
   connectedCallback() {
-    // Force a map load attempt 1s after element connects to DOM
-    // This catches cases where hass is set before the card is rendered
-    setTimeout(() => {
-      if (!this._mapLoaded && this._hass) {
-        console.log('ecovacs-mower-card: forcing initial map load');
-        this._loadSvgMap();
-      }
-    }, 1000);
+    setTimeout(() => { if (!this._mapLoaded && this._hass) this._loadMap(); }, 1000);
   }
 
-  disconnectedCallback() {
-    this._stopRefresh();
-  }
+  disconnectedCallback() { this._stopRefresh(); }
 }
-
-// ── Card editor (basic) ──────────────────────────────────────────────────────
 
 class EcovacsMowerCardEditor extends HTMLElement {
   setConfig(config) { this._config = config; }
-  get config() { return this._config; }
 }
-
-// ── Registration ─────────────────────────────────────────────────────────────
 
 customElements.define('ecovacs-mower-card', EcovacsMowerCard);
 customElements.define('ecovacs-mower-card-editor', EcovacsMowerCardEditor);
@@ -708,9 +554,8 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'ecovacs-mower-card',
   name: 'Ecovacs Mower Map',
-  description: 'Interactive map card for the GOAT A3000 LiDAR robot lawn mower',
+  description: 'Interactive map card for the GOAT A3000 LiDAR mower',
   preview: true,
-  documentationURL: 'https://github.com/adc103/ecovacs-goat-a3000',
 });
 
 console.info(

@@ -54,36 +54,20 @@ _NOTIFICATION_ID = "ecovacs_mower_card_resource"
 async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
     """Set up the mower map Lovelace card.
 
-    Copies the card JS to /config/www/ (served as /local/) and registers
-    it as a Lovelace resource. /local/ is HA's standard user-file web path
-    and is always available — no HTTP path hacks needed.
+    Copies the card JS to /config/www/ on every startup (always overwrites),
+    then updates the Lovelace resource URL to match the current version.
+    The versioned URL forces the browser to fetch fresh JS on every update.
     """
     import pathlib
     import shutil
+    import json as _json
 
     src = pathlib.Path(__file__).parent / _CARD_FILENAME
     if not src.exists():
         _LOGGER_INIT.warning("ecovacs-mower-card.js not found — map card unavailable")
         return
 
-    # Copy to /config/www/ so HA serves it as /local/ecovacs-mower-card.js
-    www_dir = pathlib.Path(hass.config.config_dir) / "www"
-    dst = www_dir / _CARD_FILENAME
-
-    try:
-        www_dir.mkdir(exist_ok=True)
-        # Only copy if source is newer or destination missing
-        if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
-            await hass.async_add_executor_job(shutil.copy2, str(src), str(dst))
-            _LOGGER_INIT.warning("Copied %s to %s", _CARD_FILENAME, dst)
-        else:
-            _LOGGER_INIT.warning("Card JS already up to date at %s", dst)
-    except Exception as err:
-        _LOGGER_INIT.warning("Could not copy card JS to www/: %s", err)
-        return
-
-    # Build versioned URL to bust browser cache on every update
-    import json as _json
+    # Get current version for cache-busting URL
     try:
         _manifest = _json.loads(
             (pathlib.Path(__file__).parent / "manifest.json").read_text()
@@ -93,9 +77,19 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         version = "1"
     card_url = f"/local/{_CARD_FILENAME}?v={version}"
 
-    # Remove any old resource entries for this card (different URL = old version)
-    # Then register the current versioned URL
-    already_registered = False
+    # Always copy JS to /config/www/ — overwrite every time so it's always current
+    www_dir = pathlib.Path(hass.config.config_dir) / "www"
+    dst = www_dir / _CARD_FILENAME
+    try:
+        www_dir.mkdir(exist_ok=True)
+        await hass.async_add_executor_job(shutil.copy2, str(src), str(dst))
+        _LOGGER_INIT.warning("ecovacs-mower-card.js copied to %s (v%s)", dst, version.replace("_", "."))
+    except Exception as err:
+        _LOGGER_INIT.warning("Could not copy card JS: %s", err)
+        return
+
+    # Update Lovelace resources — remove ALL old ecovacs-mower-card entries,
+    # then register the current versioned URL fresh
     try:
         from homeassistant.components.lovelace.resources import ResourceStorageCollection  # noqa: PLC0415
         lovelace = hass.data.get("lovelace")
@@ -103,34 +97,28 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         if resources is not None:
             await resources.async_load()
             items = list(resources.async_items())
-            # Remove stale entries for this card
+
+            # Remove every existing ecovacs-mower-card entry (stale URLs)
             for item in items:
                 if "ecovacs-mower-card" in item.get("url", ""):
-                    if item["url"] != card_url:
-                        try:
-                            await resources.async_delete_item(item["id"])
-                            _LOGGER_INIT.warning("Removed stale resource: %s", item["url"])
-                        except Exception:
-                            pass
-                    else:
-                        already_registered = True
+                    try:
+                        await resources.async_delete_item(item["id"])
+                        _LOGGER_INIT.warning("Removed old resource entry: %s", item["url"])
+                    except Exception as del_err:
+                        _LOGGER_INIT.debug("Could not remove resource: %s", del_err)
 
-            if not already_registered:
-                await resources.async_create_item({"res_type": "module", "url": card_url})
-                _LOGGER_INIT.warning(
-                    "Ecovacs mower card registered: %s — hard-refresh browser (Ctrl+Shift+R)",
-                    card_url,
-                )
-                already_registered = True
+            # Register fresh versioned URL
+            await resources.async_create_item({"res_type": "module", "url": card_url})
+            _LOGGER_INIT.warning(
+                "Lovelace resource registered: %s — hard-refresh browser!", card_url
+            )
+            return
     except Exception as err:
-        _LOGGER_INIT.warning("Lovelace auto-registration failed: %s", err)
+        _LOGGER_INIT.warning("Auto Lovelace registration failed: %s", err)
 
-    if already_registered:
-        return
-
-    # Fallback notification
+    # Fallback — log and notify
     _LOGGER_INIT.warning(
-        "ACTION REQUIRED: Add manually — Settings → Dashboards → ⋮ → Resources → "
+        "Manual step needed: Settings → Dashboards → ⋮ → Resources → "
         "+ Add Resource → URL: %s, Type: JavaScript module", card_url
     )
     try:
@@ -139,7 +127,7 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
             hass,
             title="Ecovacs Mower Card — Action Required",
             message=(
-                "Add the mower map card as a Lovelace resource (one-time only):\n\n"
+                "Add the mower map card as a Lovelace resource:\n\n"
                 "**Settings → Dashboards → ⋮ → Resources → + Add Resource**\n\n"
                 f"URL: `{card_url}`\n"
                 "Type: **JavaScript module**\n\n"

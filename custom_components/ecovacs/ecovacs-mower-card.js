@@ -12,7 +12,7 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.2.0';
+const CARD_VERSION = '2.2.1';
 
 const _MOWER_COLOR = '#00aaff';
 

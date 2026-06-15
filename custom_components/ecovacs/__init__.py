@@ -82,7 +82,8 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         _LOGGER_INIT.warning("Could not copy card JS to www/: %s", err)
         return
 
-    # Register as a Lovelace resource if not already present
+    # Check if already registered (look in Lovelace storage)
+    already_registered = False
     try:
         from homeassistant.components.lovelace.resources import ResourceStorageCollection  # noqa: PLC0415
         lovelace = hass.data.get("lovelace")
@@ -90,33 +91,43 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         if resources is not None:
             await resources.async_load()
             urls = [r.get("url", "") for r in resources.async_items()]
-            if any("ecovacs-mower-card" in u for u in urls):
-                _LOGGER_INIT.debug("Lovelace resource already registered")
-                return
-            await resources.async_create_item({"res_type": "module", "url": _CARD_URL})
-            _LOGGER_INIT.warning(
-                "Ecovacs mower card registered (%s) — hard-refresh your browser (Ctrl+Shift+R)",
-                _CARD_URL,
-            )
-            return
+            already_registered = any("ecovacs-mower-card" in u for u in urls)
+            if not already_registered:
+                await resources.async_create_item({"res_type": "module", "url": _CARD_URL})
+                already_registered = True
+                _LOGGER_INIT.warning(
+                    "Ecovacs mower card auto-registered as Lovelace resource (%s). "
+                    "Hard-refresh your browser (Ctrl+Shift+R).", _CARD_URL
+                )
     except Exception as err:
-        _LOGGER_INIT.debug("Auto Lovelace registration failed: %s", err)
+        _LOGGER_INIT.warning("Lovelace auto-registration failed: %s", err)
 
-    # Fallback: persistent notification with manual instructions
-    from homeassistant.components.persistent_notification import async_create  # noqa: PLC0415
-    async_create(
-        hass,
-        title="Ecovacs Mower Card — one-time setup required",
-        message=(
-            "The interactive mower map card needs to be added as a Lovelace resource:\n\n"
-            "1. Go to **Settings → Dashboards → ⋮ → Resources**\n"
-            "2. **+ Add Resource**\n"
-            "3. URL: `{url}`  ·  Type: **JavaScript module**\n"
-            "4. Click Create then **hard-refresh** your browser (Ctrl+Shift+R)\n\n"
-            "This is a one-time step."
-        ).format(url=_CARD_URL),
-        notification_id=_NOTIFICATION_ID,
+    if already_registered:
+        return
+
+    # Could not auto-register — send persistent notification
+    # This only fires once (notification_id prevents duplicates)
+    _LOGGER_INIT.warning(
+        "ACTION REQUIRED: Add Lovelace resource manually — "
+        "Settings → Dashboards → ⋮ → Resources → + Add Resource → "
+        "URL: %s, Type: JavaScript module", _CARD_URL
     )
+    try:
+        from homeassistant.components.persistent_notification import async_create  # noqa: PLC0415
+        async_create(
+            hass,
+            title="Ecovacs Mower Card — Action Required",
+            message=(
+                "Add the mower map card as a Lovelace resource (one-time only):\n\n"
+                "**Settings → Dashboards → ⋮ → Resources → + Add Resource**\n\n"
+                f"URL: `{_CARD_URL}`\n"
+                "Type: **JavaScript module**\n\n"
+                "Then hard-refresh your browser (Ctrl+Shift+R) and dismiss this notification."
+            ),
+            notification_id=_NOTIFICATION_ID,
+        )
+    except Exception as err:
+        _LOGGER_INIT.warning("Could not create notification: %s", err)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

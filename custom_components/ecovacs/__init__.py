@@ -2,6 +2,8 @@
 
 from sucks import VacBot
 
+import logging
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -43,9 +45,76 @@ type EcovacsConfigEntry = ConfigEntry[EcovacsController]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
+LOVELACE_CARD_URL = "/hacsfiles/ecovacs-goat-a3000/ecovacs-mower-card.js"
+LOVELACE_CARD_URL_FALLBACK = "/local/ecovacs-mower-card.js"
+_LOGGER_INIT = logging.getLogger(__name__)
+
+
+async def _async_register_lovelace_resource(hass: HomeAssistant) -> None:
+    """Register the mower map card as a Lovelace resource if not already present.
+
+    Uses HA's frontend module registration so the card JS is served directly
+    from the custom_components directory — no manual resource steps needed.
+    """
+    import pathlib
+
+    card_file = pathlib.Path(__file__).parent / "ecovacs-mower-card.js"
+    if not card_file.exists():
+        _LOGGER_INIT.warning("ecovacs-mower-card.js not found at %s", card_file)
+        return
+
+    card_url = f"/ecovacs_mower_card/ecovacs-mower-card.js"
+
+    # Serve the JS file via HA's HTTP server
+    try:
+        hass.http.register_static_path(
+            "/ecovacs_mower_card",
+            str(card_file.parent),
+            cache_headers=False,
+        )
+    except Exception as err:
+        _LOGGER_INIT.debug("Static path already registered or unavailable: %s", err)
+
+    # Register as a Lovelace resource
+    try:
+        from homeassistant.components.lovelace import _async_register_resource  # noqa: PLC0415
+        await _async_register_resource(hass, card_url, "module")
+        _LOGGER_INIT.warning(
+            "Registered Lovelace card resource: %s — refresh your browser", card_url
+        )
+        return
+    except (ImportError, Exception):
+        pass
+
+    # Fallback: use lovelace storage collection directly
+    try:
+        lovelace = hass.data.get("lovelace")
+        if not lovelace:
+            return
+        resources = lovelace.get("resources")
+        if not resources:
+            return
+
+        await resources.async_load()
+        existing_urls = [r.get("url", "") for r in resources.async_items()]
+        if any("ecovacs-mower-card" in u for u in existing_urls):
+            return
+
+        await resources.async_create_item({"res_type": "module", "url": card_url})
+        _LOGGER_INIT.warning(
+            "Registered Lovelace card resource: %s — refresh your browser", card_url
+        )
+    except Exception as err:
+        _LOGGER_INIT.warning(
+            "Could not auto-register Lovelace resource: %s. "
+            "Add manually: URL=%s Type=module", err, card_url
+        )
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the component."""
     async_setup_services(hass)
+    hass.async_create_task(_async_register_lovelace_resource(hass))
     return True
 
 

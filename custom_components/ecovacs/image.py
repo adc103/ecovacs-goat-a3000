@@ -79,7 +79,9 @@ class EcovacsMap(
 
     def image(self) -> bytes | None:
         """Return bytes of image or None."""
-        if svg := self._map.get_svg_map():
+        svg = self._map.get_svg_map()
+        _LOGGER.warning("image() called, get_svg_map returned: %s", "SVG data" if svg else "None")
+        if svg:
             return svg.encode()
 
         # Return a placeholder SVG when no map data is available yet

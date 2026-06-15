@@ -440,13 +440,14 @@ def _patch_on_mi_handler() -> None:
             if subset_ids:
                 event_bus.notify(MapSetEvent(MapSetType.ROOMS, subset_ids, mid))
 
-            # Explicitly fire MapChangedEvent to trigger image entity refresh
+            # Fire MapChangedEvent to trigger image entity refresh
             try:
                 from datetime import datetime, timezone
                 from deebot_client.events.map import MapChangedEvent
                 event_bus.notify(MapChangedEvent(datetime.now(timezone.utc)))
+                _LOGGER.warning("Fired MapChangedEvent after assembling %d zones", len(subset_ids))
             except Exception as e:
-                _LOGGER.warning("Failed to fire MapChangedEvent: %s", e)
+                _LOGGER.warning("Failed to fire MapChangedEvent: %s", e, exc_info=True)
 
             return HandlingResult.success()
 

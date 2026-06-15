@@ -307,31 +307,37 @@ class EcovacsMowerCard extends HTMLElement {
       const svg = await resp.text();
       if (!svg.includes('<svg')) throw new Error('Not SVG');
 
-      // Parse zone centroids from SVG <text> elements
-      // Each zone label is at the polygon centroid: <text x="cx" y="cy">Zone N</text>
+      // Parse zone centroids from SVG using DOMParser
+      // Each mowing zone has a <text>Zone N</text> at its centroid
       this._zoneIds = [];
-      this._zoneCentroids = {}; // zone_id -> {xPct, yPct} as % of viewBox
+      this._zoneCentroids = {};
 
-      const parser2 = new DOMParser();
-      const svgDoc2 = parser2.parseFromString(svg, 'image/svg+xml');
-      const svgEl = svgDoc2.querySelector('svg');
-      const vb = svgEl?.getAttribute('viewBox')?.split(' ').map(Number);
-      const vbW = vb?.[2] || 1;
-      const vbH = vb?.[3] || 1;
+      const svgParser = new DOMParser();
+      const svgDoc = svgParser.parseFromString(svg, 'image/svg+xml');
+      const svgEl = svgDoc.querySelector('svg');
+      const vbParts = (svgEl?.getAttribute('viewBox') || '0 0 1 1').trim().split(/\s+/).map(Number);
+      const vbW = vbParts[2] || 1;
+      const vbH = vbParts[3] || 1;
 
-      svgDoc2.querySelectorAll('text').forEach(t => {
-        const match = t.textContent.trim().match(/^Zone (\d+)$/);
-        if (!match) return;
-        const id = parseInt(match[1]);
+      svgDoc.querySelectorAll('text').forEach(t => {
+        const txt = t.textContent.trim();
+        // Match only "Zone N" labels (not ⛔ or ⌂)
+        if (!/^Zone \d+$/.test(txt)) return;
+        const id = parseInt(txt.replace('Zone ', ''));
+        // getAttribute returns the raw attribute value — reliable via DOM
         const x = parseFloat(t.getAttribute('x') || '0');
         const y = parseFloat(t.getAttribute('y') || '0');
+        if (isNaN(x) || isNaN(y)) return;
+        // Only store first occurrence per zone (largest polygon centroid)
+        if (this._zoneCentroids[id]) return;
         this._zoneCentroids[id] = {
           xPct: (x / vbW) * 100,
           yPct: (y / vbH) * 100,
         };
-        if (!this._zoneIds.includes(id)) this._zoneIds.push(id);
+        this._zoneIds.push(id);
       });
-      this._zoneIds.sort((a,b) => a-b);
+      this._zoneIds.sort((a, b) => a - b);
+      console.log('ecovacs-mower-card: zones found', this._zoneIds, this._zoneCentroids);
 
       // Store SVG for reuse in zone picker modal
       this._lastSvg = svg;

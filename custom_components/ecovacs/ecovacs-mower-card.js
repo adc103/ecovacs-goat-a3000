@@ -12,7 +12,9 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.0.6';
+const CARD_VERSION = '2.1.0';
+
+const _MOWER_COLOR = '#00aaff';
 
 const ZONE_COLORS = {
   2: '#2dcc5a',
@@ -46,6 +48,7 @@ class EcovacsMowerCard extends HTMLElement {
     this._modalMode = null;   // current modal: 'mode' | 'zone'
     this._selectedZone = null;
     this._selectedMode = null;
+    this._mowerAngle = 0;
   }
 
   static getStubConfig() {
@@ -69,6 +72,14 @@ class EcovacsMowerCard extends HTMLElement {
     this._hass = hass;
     if (!this.shadowRoot.querySelector('.card')) { this._render(); return; }
     this._updateStatusBar();
+
+    // Update mower heading from state attributes if available
+    const mowerState = hass.states[this._config.entity];
+    if (mowerState?.attributes?.heading != null) {
+      this._mowerAngle = mowerState.attributes.heading;
+      this._drawMowerOverlay();
+    }
+
     const imgState = hass.states[this._config.image_entity]?.state;
     if (imgState && imgState !== this._lastImageState) {
       this._lastImageState = imgState;
@@ -236,6 +247,13 @@ class EcovacsMowerCard extends HTMLElement {
         }
         .btn-back:hover { background: rgba(255,255,255,0.08); }
 
+        /* ── Mower overlay ── */
+        .mower-overlay {
+          position: absolute; inset: 0;
+          width: 100%; height: 100%;
+          pointer-events: none;
+        }
+
         /* ── Toast ── */
         .toast {
           position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -265,6 +283,7 @@ class EcovacsMowerCard extends HTMLElement {
 
         <div class="map-wrap" id="mapWrap">
           <img id="mapImg" alt="Mower map" />
+          <svg id="mowerOverlay" class="mower-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
           <div class="map-loading" id="mapLoading"><div class="spinner"></div> Loading map…</div>
           <div class="toast" id="toast"></div>
         </div>
@@ -291,15 +310,20 @@ class EcovacsMowerCard extends HTMLElement {
     const imgState = this._hass?.states[this._config.image_entity];
     if (!imgState) {
       loading.innerHTML = `⚠️ Entity not found: ${this._config.image_entity}`;
+      loading.style.display = 'flex';
       return;
     }
 
     const token = imgState.attributes.access_token;
-    if (!token) { loading.innerHTML = '⚠️ No access token'; return; }
+    if (!token) { loading.innerHTML = '⚠️ No access token'; loading.style.display = 'flex'; return; }
 
     const url = `/api/image_proxy/${this._config.image_entity}?token=${token}&t=${Date.now()}`;
-    loading.style.display = 'flex';
-    loading.innerHTML = '<div class="spinner"></div> Loading map…';
+
+    // Only show loading spinner on very first load, not on refreshes
+    if (!this._mapLoaded) {
+      loading.style.display = 'flex';
+      loading.innerHTML = '<div class="spinner"></div> Loading map…';
+    }
 
     try {
       const resp = await fetch(url);
@@ -345,11 +369,16 @@ class EcovacsMowerCard extends HTMLElement {
       const blob = new Blob([svg], { type: 'image/svg+xml' });
       const blobUrl = URL.createObjectURL(blob);
       img.onload = () => {
-        loading.style.display = 'none';
+        // Hide spinner only needed on first load
+        if (!this._mapLoaded) loading.style.display = 'none';
         this._mapLoaded = true;
         URL.revokeObjectURL(blobUrl);
+        this._drawMowerOverlay();
       };
-      img.onerror = () => { loading.style.display = 'none'; URL.revokeObjectURL(blobUrl); };
+      img.onerror = () => {
+        if (!this._mapLoaded) loading.style.display = 'none';
+        URL.revokeObjectURL(blobUrl);
+      };
       img.src = blobUrl;
     } catch(e) {
       loading.innerHTML = `⚠️ ${e.message}`;
@@ -480,6 +509,70 @@ class EcovacsMowerCard extends HTMLElement {
 
       layer.appendChild(bubble);
     });
+  }
+
+  // ── Mower overlay (position + direction arrow) ──────────────────────────
+
+  _drawMowerOverlay() {
+    const overlay = this.shadowRoot.getElementById('mowerOverlay');
+    const img     = this.shadowRoot.getElementById('mapImg');
+    if (!overlay || !img || !this._lastSvg) return;
+
+    // Parse mower position from stored SVG
+    // Our renderer draws mower as: fill="#00aaff" (blue circle)
+    const svgParser = new DOMParser();
+    const svgDoc    = svgParser.parseFromString(this._lastSvg, 'image/svg+xml');
+    const svgEl     = svgDoc.querySelector('svg');
+    const vb        = (svgEl?.getAttribute('viewBox') || '0 0 1 1').trim().split(/\s+/).map(Number);
+    const vbW = vb[2] || 1;
+    const vbH = vb[3] || 1;
+
+    // Find mower circle (blue fill)
+    const mowerCircle = [...svgDoc.querySelectorAll('circle')].find(c =>
+      c.getAttribute('fill') === '#00aaff' || c.getAttribute('fill') === _MOWER_COLOR
+    );
+
+    overlay.innerHTML = '';
+
+    if (!mowerCircle) return;
+
+    const cx = parseFloat(mowerCircle.getAttribute('cx') || '0');
+    const cy = parseFloat(mowerCircle.getAttribute('cy') || '0');
+    const cr = parseFloat(mowerCircle.getAttribute('r')  || '10');
+
+    // Convert to percentage of viewBox
+    const xPct = (cx / vbW) * 100;
+    const yPct = (cy / vbH) * 100;
+
+    // Render mower icon as SVG group positioned via foreignObject % coords
+    // Use a viewBox-matching coordinate system
+    overlay.setAttribute('viewBox', `0 0 ${vbW} ${vbH}`);
+    overlay.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+    const angle = this._mowerAngle || 0; // degrees, updated from onPos
+    const r = cr * 1.1;
+    const arrowLen = r * 2.2;
+
+    // Outer glow ring
+    overlay.innerHTML = `
+      <circle cx="${cx}" cy="${cy}" r="${r * 1.5}"
+        fill="none" stroke="#00aaff" stroke-width="${r * 0.3}" stroke-opacity="0.3"/>
+
+      <!-- Mower body -->
+      <circle cx="${cx}" cy="${cy}" r="${r}"
+        fill="#1a7bd4" stroke="white" stroke-width="${r * 0.25}"/>
+
+      <!-- Direction arrow -->
+      <g transform="translate(${cx},${cy}) rotate(${angle})">
+        <polygon
+          points="0,${-arrowLen} ${r * 0.45},${-r * 0.3} ${-r * 0.45},${-r * 0.3}"
+          fill="white" opacity="0.95"/>
+      </g>
+
+      <!-- Small mower icon dot -->
+      <circle cx="${cx}" cy="${cy}" r="${r * 0.3}"
+        fill="white" opacity="0.9"/>
+    `;
   }
 
   // ── Mow actions ───────────────────────────────────────────────────────────

@@ -75,7 +75,9 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         # Only copy if source is newer or destination missing
         if not dst.exists() or src.stat().st_mtime > dst.stat().st_mtime:
             await hass.async_add_executor_job(shutil.copy2, str(src), str(dst))
-            _LOGGER_INIT.debug("Copied %s to %s", _CARD_FILENAME, dst)
+            _LOGGER_INIT.warning("Copied %s to %s", _CARD_FILENAME, dst)
+        else:
+            _LOGGER_INIT.warning("Card JS already up to date at %s", dst)
     except Exception as err:
         _LOGGER_INIT.warning("Could not copy card JS to www/: %s", err)
         return
@@ -120,7 +122,6 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the component."""
     async_setup_services(hass)
-    hass.async_create_task(_async_setup_lovelace_card(hass))
     return True
 
 
@@ -144,6 +145,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: EcovacsConfigEntry) -> b
             name=f"{entry.title}_wait_connect_{device.vacuum['did']}",
         )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Set up Lovelace card after all platforms are ready
+    # Run only once (first config entry) to avoid duplicate registration
+    if not hass.data.get("ecovacs_card_setup_done"):
+        hass.data["ecovacs_card_setup_done"] = True
+        hass.async_create_task(_async_setup_lovelace_card(hass))
+
     return True
 
 

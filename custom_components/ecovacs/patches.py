@@ -13,25 +13,32 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _patch_on_pos_handler() -> None:
-    """Patch MqttClient._handle_message to intercept onPos, onCleanInfo, onMapTrace."""
+    """Patch MqttClient._handle_atr to intercept onPos, onCleanInfo, onMapTrace.
+    
+    _handle_atr receives (topic_command, payload_bytes) for all iot/atr/# messages.
+    topic_command is the command name e.g. 'onPos', 'onMapTrace', 'onCleanInfo'.
+    """
     import json as _json
     from deebot_client.mqtt_client import MqttClient  # noqa: PLC0415
 
-    original_fn = getattr(MqttClient, '_handle_message', None)
+    original_fn = getattr(MqttClient, '_handle_atr', None)
     if original_fn is None:
-        _LOGGER.warning("MqttClient._handle_message not found — cannot intercept onPos")
+        _LOGGER.warning("MqttClient._handle_atr not found — cannot intercept onPos")
         return
 
-    def _patched_handle_message(self, message):
+    def _patched_handle_atr(self, topic_split: list, payload: bytes) -> None:
         # Call original first
-        original_fn(self, message)
+        original_fn(self, topic_split, payload)
 
         try:
-            topic = getattr(message, 'topic', '') or ''
-            payload_bytes = getattr(message, 'payload', b'') or b''
-            payload_str = payload_bytes.decode('utf-8') if isinstance(payload_bytes, bytes) else str(payload_bytes)
+            # topic_split[2] is the command name: onPos, onMapTrace, onCleanInfo, etc.
+            cmd = topic_split[2] if len(topic_split) > 2 else ''
+            if cmd not in ('onPos', 'onCleanInfo', 'onMapTrace'):
+                return
 
-            if '/onPos/' in topic:
+            payload_str = payload.decode('utf-8') if isinstance(payload, (bytes, bytearray)) else str(payload)
+
+            if cmd == 'onPos':
                 data = _json.loads(payload_str).get('body', {}).get('data', {})
                 pos = data.get('deebotPos', {})
                 x, y, a = pos.get('x'), pos.get('y'), pos.get('a', 0)
@@ -43,7 +50,7 @@ def _patch_on_pos_handler() -> None:
                     if len(_GLOBAL_TRACE_STORE) > 10000:
                         _GLOBAL_TRACE_STORE = _GLOBAL_TRACE_STORE[-10000:]
 
-            elif '/onCleanInfo/' in topic:
+            elif cmd == 'onCleanInfo':
                 data = _json.loads(payload_str).get('body', {}).get('data', {})
                 c = data.get('cleanState', {}).get('content', {})
                 if c.get('type') == 'spotArea':
@@ -54,14 +61,14 @@ def _patch_on_pos_handler() -> None:
                         _GLOBAL_ACTIVE_ZONE = zone_id
                         _GLOBAL_TRACE_STORE = []
 
-            elif '/onMapTrace/' in topic:
+            elif cmd == 'onMapTrace':
                 _handle_map_trace_chunk(payload_str)
 
-        except Exception:
-            pass
+        except Exception as e:
+            _LOGGER.debug("ATR intercept error for %s: %s", topic_split[2] if len(topic_split) > 2 else '?', e)
 
-    MqttClient._handle_message = _patched_handle_message
-    _LOGGER.warning("onPos/onCleanInfo/onMapTrace MQTT interceptor registered")
+    MqttClient._handle_atr = _patched_handle_atr
+    _LOGGER.warning("onPos/onCleanInfo/onMapTrace interceptor registered via _handle_atr")
 
 
 # Chunk buffer for onMapTrace (same pattern as onMI/onArI)

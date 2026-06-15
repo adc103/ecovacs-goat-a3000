@@ -402,18 +402,21 @@ def _patch_on_mi_handler() -> None:
             try:
                 lzma_header = all_raw[0:5]
                 total_len = struct.unpack("<I", all_raw[5:9])[0]
-                compressed = all_raw[9:]  # all compressed data concatenated
+                compressed = all_raw[9:]
+                _LOGGER.warning("onMI: decompressing %d bytes -> expected %d bytes for batid=%s", len(compressed), total_len, batid)
                 filter_props = lzma._decode_filter_properties(lzma.FILTER_LZMA1, lzma_header)
                 dec = lzma.LZMADecompressor(lzma.FORMAT_RAW, None, [filter_props])
                 full_bytes = dec.decompress(compressed, total_len)
-            except Exception:
-                _LOGGER.warning("Failed to decompress reassembled onMI data for map %s", mid)
+                _LOGGER.warning("onMI: decompressed %d bytes for batid=%s", len(full_bytes), batid)
+            except Exception as e:
+                _LOGGER.warning("onMI: decompression failed for batid=%s: %s", batid, e, exc_info=True)
                 return HandlingResult.analyse()
 
             try:
                 zones = orjson.loads(full_bytes)
-            except Exception:
-                _LOGGER.warning("Failed to parse onMI JSON for map %s", mid)
+                _LOGGER.warning("onMI: parsed JSON with %d entries for batid=%s", len(zones), batid)
+            except Exception as e:
+                _LOGGER.warning("onMI: JSON parse failed for batid=%s: %s", batid, e, exc_info=True)
                 return HandlingResult.analyse()
 
             _LOGGER.warning("onMI: assembled %d zone entries for map %s", len(zones), mid)
@@ -439,12 +442,13 @@ def _patch_on_mi_handler() -> None:
 
                 # Emit with ROOMS type - renderer will handle zone coloring
                 event_bus.notify(MapSubsetEvent(id=zone_id, type=MapSetType.ROOMS, coordinates=coordinates, name=""))
+                _LOGGER.warning("onMI: emitted MapSubsetEvent zone_id=%d coords=%d pts batid=%s", zone_id, len(coord_pairs), batid)
                 if zone_id not in subset_ids:
                     subset_ids.append(zone_id)
 
             if subset_ids:
                 event_bus.notify(MapSetEvent(MapSetType.ROOMS, subset_ids, mid))
-                _LOGGER.warning("onMI: emitted %d zones: %s", len(subset_ids), subset_ids)
+                _LOGGER.warning("onMI: emitted MapSetEvent zones=%s for batid=%s", subset_ids, batid)
 
             # Fire MapChangedEvent to trigger image entity refresh
             try:

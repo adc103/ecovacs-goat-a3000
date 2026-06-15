@@ -12,6 +12,16 @@ from .const import DOMAIN
 from .patches import apply_patches
 
 # Apply patches for GOAT A3000 LiDAR improvements
+import json as _json, pathlib as _pathlib
+try:
+    _manifest = _json.loads((_pathlib.Path(__file__).parent / "manifest.json").read_text())
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "=== Ecovacs GOAT A3000 Enhanced v%s loading ===",
+        _manifest.get("version", "unknown")
+    )
+except Exception:
+    pass
 apply_patches()
 from .controller import EcovacsController
 from .services import async_setup_services

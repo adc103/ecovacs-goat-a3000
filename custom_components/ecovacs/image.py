@@ -87,10 +87,17 @@ class EcovacsMap(
         if self._device.capabilities.device_type is DeviceType.MOWER:
             subsets = list(self._map._map_data.map_subsets.values())
             positions = self._map._map_data._positions
+            _LOGGER.warning(
+                "image() called: %d subsets in map_data, positions=%s",
+                len(subsets),
+                [str(p) for p in positions] if positions else "none"
+            )
             svg = render_mower_map(subsets, positions)
             if svg:
-                _LOGGER.debug("Rendered mower map SVG with %d zones", len(subsets))
+                _LOGGER.warning("image(): rendered SVG (%d chars) with %d subsets", len(svg), len(subsets))
                 return svg.encode()
+            else:
+                _LOGGER.warning("image(): render_mower_map returned None (no usable zone data)")
         else:
             # Vacuum: use Rust map module
             svg = self._map.get_svg_map()

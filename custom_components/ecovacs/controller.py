@@ -85,7 +85,8 @@ class EcovacsController:
                 mqtt_devices = [
                     Device(info, self._authenticator) for info in devices.mqtt
                 ]
-                async with asyncio.TaskGroup() as tg:
+                _mower_devices_for_map_refresh: list = []
+            async with asyncio.TaskGroup() as tg:
 
                     async def _init(device: Device) -> None:
                         """Initialize MQTT device."""
@@ -98,8 +99,7 @@ class EcovacsController:
                         # Schedule map refresh for mowers after connection stabilizes
                         from deebot_client.capabilities import DeviceType
                         if device.capabilities.device_type is DeviceType.MOWER:
-                            import asyncio as _asyncio
-                            _asyncio.ensure_future(async_request_map_refresh(device))
+                            _mower_devices_for_map_refresh.append(device)
                         tg.create_task(_init(device))
 
             for device_config in devices.xmpp:
@@ -113,6 +113,10 @@ class EcovacsController:
                     monitor=True,
                 )
                 self._legacy_devices.append(bot)
+            # Schedule map refresh for mowers after initialization
+            for _mower in _mower_devices_for_map_refresh:
+                asyncio.ensure_future(async_request_map_refresh(_mower))
+
             for device_config in devices.not_supported:
                 _LOGGER.warning(
                     (

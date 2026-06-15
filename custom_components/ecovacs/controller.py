@@ -93,6 +93,8 @@ class EcovacsController:
                         self._devices.append(device)
 
                     for device in mqtt_devices:
+                        from .patches import log_device_capabilities
+                        log_device_capabilities(device)
                         tg.create_task(_init(device))
 
             for device_config in devices.xmpp:

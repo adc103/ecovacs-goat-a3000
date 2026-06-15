@@ -253,3 +253,33 @@ def _patch_clean_info_state() -> None:
     pass  # GetCleanInfo already handles 'idle' state correctly
 
 
+
+
+def log_device_capabilities(device) -> None:
+    """Log all capabilities and entities for a device."""
+    caps = device.capabilities
+    _LOGGER.warning("=== DEVICE DIAGNOSTIC: %s ===", device.device_info.get("nick", "unknown"))
+    _LOGGER.warning("Device type: %s", caps.device_type)
+    _LOGGER.warning("Device class: %s", device.device_info.get("class"))
+    
+    # Log all capabilities
+    for attr in dir(caps):
+        if attr.startswith("_"):
+            continue
+        val = getattr(caps, attr, None)
+        if val is not None:
+            _LOGGER.warning("  capability.%s = %s", attr, type(val).__name__)
+    
+    # Log map specifically
+    if caps.map:
+        _LOGGER.warning("Map capabilities:")
+        for attr in dir(caps.map):
+            if attr.startswith("_"):
+                continue
+            val = getattr(caps.map, attr, None)
+            if val is not None:
+                _LOGGER.warning("  map.%s = %s", attr, type(val).__name__)
+    
+    # Log device.map object
+    _LOGGER.warning("device.map object: %s", device.map)
+    _LOGGER.warning("=== END DIAGNOSTIC ===")

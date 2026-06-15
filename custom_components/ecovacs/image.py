@@ -107,3 +107,5 @@ class EcovacsMap(
         """
         await super().async_update()
         self._map.refresh()
+
+# v0.2.2 force update

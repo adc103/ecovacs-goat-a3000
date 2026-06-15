@@ -169,7 +169,7 @@ class EcovacsMowerCard extends HTMLElement {
         /* ── Zone picker modal ── */
         .zone-modal {
           position: absolute; inset: 0; z-index: 20;
-          background: rgba(0,0,0,0.45);
+          background: rgba(0,0,0,0.35);
           display: flex; flex-direction: column;
         }
         .zone-modal-header {
@@ -189,21 +189,32 @@ class EcovacsMowerCard extends HTMLElement {
           position: absolute;
           transform: translate(-50%, -50%);
           border-radius: 50px;
-          padding: 8px 16px;
-          font-size: 13px; font-weight: 700;
+          padding: 7px 16px 7px 10px;
+          font-size: 13px; font-weight: 600;
           cursor: pointer; white-space: nowrap;
-          border: 2px solid rgba(255,255,255,0.3);
-          background: rgba(30,30,30,0.85);
-          color: #fff;
+          border: 2px solid rgba(255,255,255,0.9);
+          background: rgba(255,255,255,0.92);
+          color: #222;
           transition: all 0.15s;
-          display: flex; align-items: center; gap: 6px;
+          display: flex; align-items: center; gap: 8px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
-        .zone-bubble:hover { transform: translate(-50%, -50%) scale(1.08); border-color: #fff; }
+        .zone-bubble:hover { transform: translate(-50%, -50%) scale(1.06); box-shadow: 0 4px 14px rgba(0,0,0,0.4); }
         .zone-bubble.selected {
-          border-color: #4aff7b; background: rgba(74,255,123,0.2); color: #4aff7b;
-          transform: translate(-50%, -50%) scale(1.1);
+          border-color: #4aff7b;
+          background: #fff;
+          box-shadow: 0 0 0 3px #4aff7b, 0 4px 14px rgba(0,0,0,0.4);
+          transform: translate(-50%, -50%) scale(1.08);
         }
-        .zone-bubble-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .zone-bubble-circle {
+          width: 28px; height: 28px; border-radius: 50%;
+          border: 2px solid currentColor;
+          flex-shrink: 0;
+          display: flex; align-items: center; justify-content: center;
+        }
+        .zone-bubble.selected .zone-bubble-circle {
+          background: #4aff7b; border-color: #4aff7b; color: #fff;
+        }
 
         .zone-modal-footer {
           padding: 12px 14px;
@@ -444,7 +455,7 @@ class EcovacsMowerCard extends HTMLElement {
       bubble.className = 'zone-bubble';
       bubble.style.left = `${xPct}%`;
       bubble.style.top  = `${yPct}%`;
-      bubble.innerHTML  = `<span class="zone-bubble-dot" style="background:${color}"></span>${name}`;
+      bubble.innerHTML  = `<span class="zone-bubble-circle" style="color:${color}"></span>${name}`;
       bubble.dataset.zoneId = zoneId;
 
       bubble.addEventListener('click', () => {

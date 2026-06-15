@@ -454,3 +454,26 @@ def _patch_on_mi_handler() -> None:
     # Register in the messages dict
     messages_module.MESSAGES["onMI"] = OnMI
     _LOGGER.warning("OnMI handler registered - GOAT mower zone map data will now be processed")
+
+
+async def async_request_map_refresh(device) -> None:
+    """Request map data refresh from mower.
+    
+    Sends GetMapSet commands which triggers the mower to push
+    onMI chunks with zone polygon data.
+    """
+    import asyncio
+    from deebot_client.commands.json.map import GetMapSet
+    from deebot_client.events.map import MapSetType
+
+    # Wait a bit for MQTT connection to stabilize
+    await asyncio.sleep(5)
+
+    _LOGGER.warning("Requesting map data refresh from mower")
+    try:
+        for map_type in [MapSetType.ROOMS, MapSetType.VIRTUAL_WALLS, MapSetType.NO_MOP_ZONES]:
+            await device.execute_command(GetMapSet("1", map_type))
+            await asyncio.sleep(0.5)
+        _LOGGER.warning("Map refresh commands sent - waiting for onMI chunks")
+    except Exception as e:
+        _LOGGER.warning("Failed to request map refresh: %s", e)

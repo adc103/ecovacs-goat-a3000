@@ -93,8 +93,13 @@ class EcovacsController:
                         self._devices.append(device)
 
                     for device in mqtt_devices:
-                        from .patches import log_device_capabilities
+                        from .patches import log_device_capabilities, async_request_map_refresh
                         log_device_capabilities(device)
+                        # Schedule map refresh for mowers after connection stabilizes
+                        from deebot_client.capabilities import DeviceType
+                        if device.capabilities.device_type is DeviceType.MOWER:
+                            import asyncio
+                            asyncio.ensure_future(async_request_map_refresh(device))
                         tg.create_task(_init(device))
 
             for device_config in devices.xmpp:

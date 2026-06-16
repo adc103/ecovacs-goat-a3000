@@ -12,7 +12,7 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.3.1';
+const CARD_VERSION = '2.3.2';
 
 const _MOWER_COLOR = '#00aaff';  // must match map_renderer.py _MOWER_COLOR
 
@@ -290,7 +290,7 @@ class EcovacsMowerCard extends HTMLElement {
         <div class="map-wrap" id="mapWrap">
           <img id="mapImg" alt="Mower map" />
           <svg id="mowerOverlay" class="mower-overlay" xmlns="http://www.w3.org/2000/svg"></svg>
-          <div class="map-loading" id="mapLoading"><div class="spinner"></div> Loading map…</div>
+          <div class="map-loading" id="mapLoading"><div class="spinner"></div> Waiting for map data…</div>
           <div class="toast" id="toast"></div>
         </div>
       </div>
@@ -328,7 +328,7 @@ class EcovacsMowerCard extends HTMLElement {
     // Only show loading spinner on very first load, not on refreshes
     if (!this._mapLoaded) {
       loading.style.display = 'flex';
-      loading.innerHTML = '<div class="spinner"></div> Loading map…';
+      loading.innerHTML = '<div class="spinner"></div> Waiting for map data…';
     }
 
     try {

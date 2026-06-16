@@ -146,11 +146,10 @@ def _handle_map_trace_chunk(payload_str: str) -> None:
                     new_traces.append(';'.join(coords))
 
         if new_traces:
-            global _GLOBAL_TRACE_STORE
-            # Store as coordinate strings (replace onPos-based trace)
-            _GLOBAL_TRACE_STORE_SVG = new_traces
-            _LOGGER.warning("onMapTrace: %d trace polygons stored (batid=%s)", len(new_traces), batid)
-            # Also emit MapChangedEvent so image refreshes
+            global _GLOBAL_TRACE_STORE, _GLOBAL_TRACE_STORE_SVG
+            # Merge new trace polygons with existing (accumulate across charge cycles)
+            _GLOBAL_TRACE_STORE_SVG.extend(new_traces)
+            _LOGGER.warning("onMapTrace: +%d polygons (total=%d, batid=%s)", len(new_traces), len(_GLOBAL_TRACE_STORE_SVG), batid)
             _TRACE_CHUNK_BUFFER.pop(batid, None)
             _TRACE_CHUNK_COUNTS.pop(batid, None)
 

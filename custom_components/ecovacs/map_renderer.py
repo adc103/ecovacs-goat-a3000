@@ -343,6 +343,9 @@ def render_mower_map_from_store(
                 f'stroke-width="{sw*0.6:.0f}" stroke-linecap="round"/>'
             )
 
+    # 5b. Zone labels — rendered on top of obstacles and traces
+    elements.extend(zone_labels)
+
     # 6. Dock outline (subtle yellow shape)
     if dock_outline and len(dock_outline) >= 3:
         p = pts_to_poly(dock_outline)

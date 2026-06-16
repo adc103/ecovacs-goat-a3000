@@ -67,11 +67,11 @@ async def _async_setup_lovelace_card(hass: HomeAssistant) -> None:
         _LOGGER_INIT.warning("ecovacs-mower-card.js not found — map card unavailable")
         return
 
-    # Get current version for cache-busting URL
+    # Get current version for cache-busting URL (read in executor to avoid blocking)
     try:
-        _manifest = _json.loads(
-            (pathlib.Path(__file__).parent / "manifest.json").read_text()
-        )
+        manifest_path = pathlib.Path(__file__).parent / "manifest.json"
+        manifest_text = await hass.async_add_executor_job(manifest_path.read_text)
+        _manifest = _json.loads(manifest_text)
         version = _manifest.get("version", "1").replace(".", "_")
     except Exception:
         version = "1"

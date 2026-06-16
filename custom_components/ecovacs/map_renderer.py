@@ -278,7 +278,8 @@ def render_mower_map_from_store(
             f'stroke-dasharray="{dash:.0f} {gap:.0f}"/>'
         )
 
-    # 2. Mowing zones
+    # 2. Mowing zones (polygons only — labels collected and rendered after obstacles)
+    zone_labels: list[str] = []
     color_idx = 0
     for zid, pts in sorted(zone_polygons.items()):
         if zid in no_go_ids:

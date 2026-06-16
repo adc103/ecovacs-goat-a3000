@@ -33,7 +33,7 @@ def _patch_on_pos_handler() -> None:
         try:
             # topic_split[2] is the command name: onPos, onMapTrace, onCleanInfo, etc.
             cmd = topic_split[2] if len(topic_split) > 2 else ''
-            if cmd not in ('onPos', 'onCleanInfo', 'onMapTrace'):
+            if cmd not in ('onPos', 'onCleanInfo', 'onMapTrace', 'onChargeState', 'onBattery', 'onStats'):
                 return
 
             payload_str = payload.decode('utf-8') if isinstance(payload, (bytes, bytearray)) else str(payload)
@@ -53,13 +53,36 @@ def _patch_on_pos_handler() -> None:
             elif cmd == 'onCleanInfo':
                 data = _json.loads(payload_str).get('body', {}).get('data', {})
                 c = data.get('cleanState', {}).get('content', {})
+                motion = data.get('cleanState', {}).get('motionState')
+                trigger = data.get('trigger')
+                global _GLOBAL_MOW_STATE
+                _GLOBAL_MOW_STATE['motion_state'] = motion
+                _GLOBAL_MOW_STATE['trigger'] = trigger
                 if c.get('type') == 'spotArea':
                     zone_id = c.get('value')
                     global _GLOBAL_ACTIVE_ZONE
-                    if zone_id != _GLOBAL_ACTIVE_ZONE:
+                    if zone_id and zone_id != _GLOBAL_ACTIVE_ZONE:
                         _LOGGER.warning("Zone mow: %s (was %s) — clearing trace", zone_id, _GLOBAL_ACTIVE_ZONE)
                         _GLOBAL_ACTIVE_ZONE = zone_id
                         _GLOBAL_TRACE_STORE = []
+                        _GLOBAL_TRACE_STORE_SVG = []
+
+            elif cmd == 'onChargeState':
+                data = _json.loads(payload_str).get('body', {}).get('data', {})
+                global _GLOBAL_MOW_STATE
+                _GLOBAL_MOW_STATE['is_charging'] = bool(data.get('isCharging', 0))
+
+            elif cmd == 'onBattery':
+                data = _json.loads(payload_str).get('body', {}).get('data', {})
+                global _GLOBAL_MOW_STATE
+                _GLOBAL_MOW_STATE['battery'] = data.get('value')
+
+            elif cmd == 'onStats':
+                data = _json.loads(payload_str).get('body', {}).get('data', {})
+                global _GLOBAL_MOW_STATE
+                _GLOBAL_MOW_STATE['mowed_area_m2'] = round(data.get('mowedArea', 0) / 1_000_000, 1)
+                _GLOBAL_MOW_STATE['total_area_m2'] = round(data.get('area', 0) / 1_000_000, 1)
+                _GLOBAL_MOW_STATE['mow_time_s'] = data.get('time', 0)
 
             elif cmd == 'onMapTrace':
                 _handle_map_trace_chunk(payload_str)
@@ -709,6 +732,18 @@ _GLOBAL_TRACE_STORE_SVG: list[str] = []              # onMapTrace coord strings 
 _GLOBAL_MOWER_HEADING: int = 0
 _GLOBAL_ACTIVE_ZONE: str | None = None
 
+# Extended mow state
+_GLOBAL_MOW_STATE: dict = {
+    "motion_state": None,      # pause, alert, goCharging, clean, idle
+    "trigger": None,           # lowBattery, userCmd, etc
+    "is_charging": False,
+    "battery": None,
+    "mowed_area_m2": 0.0,
+    "total_area_m2": 0.0,
+    "mow_time_s": 0,
+    "resume_at_pct": 80,       # default resume battery %
+}
+
 
 def get_trace_store() -> list[tuple[int, int, int]]:
     return _GLOBAL_TRACE_STORE
@@ -721,6 +756,9 @@ def get_active_zone() -> str | None:
 
 def get_trace_store_svg() -> list[str]:
     return _GLOBAL_TRACE_STORE_SVG
+
+def get_mow_state() -> dict:
+    return _GLOBAL_MOW_STATE
 
 def clear_trace_store() -> None:
     global _GLOBAL_TRACE_STORE, _GLOBAL_TRACE_STORE_SVG

@@ -222,6 +222,12 @@ async def async_setup_entry(
         if (capability := device.capabilities.error)
     )
 
+    # Add mow state sensor for mower devices
+    from .mow_state_sensor import MowStateSensor  # noqa: PLC0415
+    for device in controller.devices:
+        if hasattr(device.capabilities, 'device_type') and                 str(getattr(device.capabilities.device_type, 'value', '')) == 'mower':
+            entities.append(MowStateSensor(hass, device.device_info.did, device.device_info.nick or device.device_info.did))
+    
     async_add_entities(entities)
 
     async def _add_legacy_lifespan_entities() -> None:

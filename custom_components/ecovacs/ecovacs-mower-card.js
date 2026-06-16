@@ -12,7 +12,7 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.2.5';
+const CARD_VERSION = '2.3.0';
 
 const _MOWER_COLOR = '#00aaff';  // must match map_renderer.py _MOWER_COLOR
 
@@ -25,12 +25,13 @@ const ZONE_COLORS = {
 };
 
 const MOWER_STATES = {
-  mowing:    { label: 'Mowing',    color: '#4aff7b', icon: '🌿' },
-  docked:    { label: 'Docked',    color: '#ffe605', icon: '⚡' },
-  paused:    { label: 'Paused',    color: '#ff9f4a', icon: '⏸'  },
-  returning: { label: 'Returning', color: '#4a9eff', icon: '🏠' },
-  error:     { label: 'Error',     color: '#ff4444', icon: '⚠️' },
-  idle:      { label: 'Idle',      color: '#aaaaaa', icon: '💤' },
+  mowing:          { label: 'Mowing',              color: '#4aff7b', icon: '🌿' },
+  docked:          { label: 'Docked',              color: '#ffe605', icon: '⚡' },
+  paused:          { label: 'Paused',              color: '#ff9f4a', icon: '⏸'  },
+  charging_resume: { label: 'Charging to resume',  color: '#4a9eff', icon: '🔋' },
+  returning:       { label: 'Returning',           color: '#4a9eff', icon: '🏠' },
+  error:           { label: 'Error',               color: '#ff4444', icon: '⚠️' },
+  idle:            { label: 'Idle',                color: '#aaaaaa', icon: '💤' },
 };
 
 class EcovacsMowerCard extends HTMLElement {
@@ -49,6 +50,7 @@ class EcovacsMowerCard extends HTMLElement {
     this._selectedZone = null;
     this._selectedMode = null;
     this._mowerAngle = 0;
+    this._mowState = {};
   }
 
   static getStubConfig() {
@@ -73,10 +75,15 @@ class EcovacsMowerCard extends HTMLElement {
     if (!this.shadowRoot.querySelector('.card')) { this._render(); return; }
     this._updateStatusBar();
 
-    // Update mower heading from state attributes if available
+    // Update mower heading and mow state from entity attributes
     const mowerState = hass.states[this._config.entity];
     if (mowerState?.attributes?.heading != null) {
       this._mowerAngle = mowerState.attributes.heading;
+    }
+    // Read extended mow state from sensor if available
+    const mowStateSensor = hass.states['sensor.' + (this._config.entity.split('.')[1]) + '_mow_state'];
+    if (mowStateSensor?.attributes) {
+      this._mowState = mowStateSensor.attributes;
       this._drawMowerOverlay();
     }
 
@@ -623,21 +630,47 @@ class EcovacsMowerCard extends HTMLElement {
     const state = this._hass.states[this._config.entity];
     if (!state) return;
 
-    const info  = MOWER_STATES[state.state] || MOWER_STATES.idle;
-    const attrs = state.attributes;
-    const mowing = state.state === 'mowing';
+    const attrs   = state.attributes;
+    const mowing  = state.state === 'mowing';
+    const battery = attrs.battery_level ?? this._mowState?.battery ?? null;
+    const isChargingToResume =
+      state.state === 'paused' && this._mowState?.is_charging;
 
-    this.shadowRoot.getElementById('statusDot').style.background   = info.color;
-    this.shadowRoot.getElementById('statusLabel').textContent       = `${info.icon} ${info.label}`;
+    // Pick display state
+    const displayState = isChargingToResume ? 'charging_resume' : state.state;
+    const info = MOWER_STATES[displayState] || MOWER_STATES.idle;
 
+    // Build label — add battery % target if charging to resume
+    let label = `${info.icon} ${info.label}`;
+    if (isChargingToResume && battery != null) {
+      label = `${info.icon} Charging · ${battery}% → 80%`;
+    }
+
+    this.shadowRoot.getElementById('statusDot').style.background = info.color;
+    this.shadowRoot.getElementById('statusLabel').textContent    = label;
+
+    // Meta line: progress info
     const parts = [];
-    if (attrs.battery_level != null) parts.push(`🔋 ${attrs.battery_level}%`);
-    if (attrs.mowed_area)            parts.push(`📐 ${attrs.mowed_area} m²`);
+    if (battery != null)                          parts.push(`🔋 ${battery}%`);
+    const mowed = this._mowState?.mowed_area_m2;
+    const total = this._mowState?.total_area_m2;
+    if (mowed && total) {
+      const pct = Math.round((mowed / total) * 100);
+      parts.push(`🌿 ${mowed}m² / ${total}m² (${pct}%)`);
+    } else if (attrs.mowed_area) {
+      parts.push(`📐 ${attrs.mowed_area} m²`);
+    }
+    const secs = this._mowState?.mow_time_s;
+    if (secs) {
+      const hrs = Math.floor(secs / 3600);
+      const mins = Math.floor((secs % 3600) / 60);
+      parts.push(`⏱ ${hrs}h ${mins}m`);
+    }
     this.shadowRoot.getElementById('statusMeta').textContent = parts.join('  ·  ');
 
-    this.shadowRoot.getElementById('btnMow').disabled   = mowing;
+    this.shadowRoot.getElementById('btnMow').disabled   = mowing || isChargingToResume;
     this.shadowRoot.getElementById('btnPause').disabled = !mowing;
-    this.shadowRoot.getElementById('btnDock').disabled  = state.state === 'docked';
+    this.shadowRoot.getElementById('btnDock').disabled  = state.state === 'docked' && !isChargingToResume;
   }
 
   // ── Refresh ───────────────────────────────────────────────────────────────

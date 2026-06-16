@@ -57,15 +57,32 @@ def _patch_on_pos_handler() -> None:
                 c = data.get('cleanState', {}).get('content', {})
                 motion = data.get('cleanState', {}).get('motionState')
                 trigger = data.get('trigger')
+                prev_motion = _GLOBAL_MOW_STATE.get('motion_state')
                 _GLOBAL_MOW_STATE['motion_state'] = motion
                 _GLOBAL_MOW_STATE['trigger'] = trigger
-                if c.get('type') == 'spotArea':
+
+                # Clear trace when mow job ends (returns to idle after mowing/paused)
+                mow_active_states = {'clean', 'goCharging', 'pause', 'back'}
+                mow_ended = (
+                    prev_motion in mow_active_states
+                    and motion in ('idle', 'stop', None)
+                    and trigger != 'lowBattery'  # don't clear for charge-and-resume
+                )
+                if mow_ended:
+                    _LOGGER.warning("Mow ended (motion: %s→%s) — clearing trace", prev_motion, motion)
+                    _GLOBAL_TRACE_STORE = []
+                    _GLOBAL_TRACE_STORE_SVG = []
+                    _GLOBAL_ACTIVE_ZONE = None
+                    _persist_trace_store()
+
+                elif c.get('type') == 'spotArea':
                     zone_id = c.get('value')
                     if zone_id and zone_id != _GLOBAL_ACTIVE_ZONE:
-                        _LOGGER.warning("Zone mow: %s (was %s) — clearing trace", zone_id, _GLOBAL_ACTIVE_ZONE)
+                        _LOGGER.warning("New zone mow: %s (was %s) — clearing trace", zone_id, _GLOBAL_ACTIVE_ZONE)
                         _GLOBAL_ACTIVE_ZONE = zone_id
                         _GLOBAL_TRACE_STORE = []
                         _GLOBAL_TRACE_STORE_SVG = []
+                        _persist_trace_store()
 
             elif cmd == 'onChargeState':
                 data = _json.loads(payload_str).get('body', {}).get('data', {})

@@ -166,6 +166,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: EcovacsConfigEntry) -> b
         )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Initialize trace persistence (load saved trace from previous session)
+    try:
+        from custom_components.ecovacs.patches import init_trace_persistence  # noqa: PLC0415
+        init_trace_persistence(hass.config.config_dir)
+    except Exception as err:
+        _LOGGER_INIT.debug("Trace persistence init failed: %s", err)
+
     # Register live position and clean info handlers for trace/heading
     try:
         from custom_components.ecovacs.patches import (  # noqa: PLC0415

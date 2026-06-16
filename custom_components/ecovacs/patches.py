@@ -755,6 +755,37 @@ def get_active_zone() -> str | None:
 def get_trace_store_svg() -> list[str]:
     return _GLOBAL_TRACE_STORE_SVG
 
+
+_TRACE_PERSIST_PATH: str | None = None
+
+
+def init_trace_persistence(config_dir: str) -> None:
+    """Initialize trace persistence and load saved trace from disk."""
+    global _TRACE_PERSIST_PATH, _GLOBAL_TRACE_STORE_SVG
+    import os, json as _json
+    _TRACE_PERSIST_PATH = os.path.join(config_dir, ".storage", "ecovacs_mow_trace.json")
+    try:
+        if os.path.exists(_TRACE_PERSIST_PATH):
+            with open(_TRACE_PERSIST_PATH, "r") as f:
+                data = _json.load(f)
+            traces = data.get("traces", [])
+            _GLOBAL_TRACE_STORE_SVG = traces
+            _LOGGER.warning("Loaded %d persisted trace polygons", len(traces))
+    except Exception as e:
+        _LOGGER.debug("Could not load persisted trace: %s", e)
+
+
+def _persist_trace_store() -> None:
+    """Save trace to disk so it survives HA restarts."""
+    if not _TRACE_PERSIST_PATH:
+        return
+    try:
+        import json as _json
+        with open(_TRACE_PERSIST_PATH, "w") as f:
+            _json.dump({"traces": _GLOBAL_TRACE_STORE_SVG}, f)
+    except Exception as e:
+        _LOGGER.debug("Could not persist trace: %s", e)
+
 def get_mow_state() -> dict:
     return _GLOBAL_MOW_STATE
 

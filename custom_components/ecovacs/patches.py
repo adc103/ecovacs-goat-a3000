@@ -27,11 +27,14 @@ def _patch_on_pos_handler() -> None:
         return
 
     def _patched_handle_atr(self, topic_split: list, payload: bytes) -> None:
+        # All globals declared at top — Python requirement
+        global _GLOBAL_MOWER_HEADING, _GLOBAL_TRACE_STORE, _GLOBAL_TRACE_STORE_SVG
+        global _GLOBAL_ACTIVE_ZONE, _GLOBAL_MOW_STATE
+
         # Call original first
         original_fn(self, topic_split, payload)
 
         try:
-            # topic_split[2] is the command name: onPos, onMapTrace, onCleanInfo, etc.
             cmd = topic_split[2] if len(topic_split) > 2 else ''
             if cmd not in ('onPos', 'onCleanInfo', 'onMapTrace', 'onChargeState', 'onBattery', 'onStats'):
                 return
@@ -44,7 +47,6 @@ def _patch_on_pos_handler() -> None:
                 x, y, a = pos.get('x'), pos.get('y'), pos.get('a', 0)
                 invalid = pos.get('invalid', 0)
                 if x is not None and y is not None and not invalid:
-                    global _GLOBAL_MOWER_HEADING, _GLOBAL_TRACE_STORE
                     _GLOBAL_MOWER_HEADING = int(a)
                     _GLOBAL_TRACE_STORE.append((int(x), int(y), int(a)))
                     if len(_GLOBAL_TRACE_STORE) > 10000:
@@ -55,12 +57,10 @@ def _patch_on_pos_handler() -> None:
                 c = data.get('cleanState', {}).get('content', {})
                 motion = data.get('cleanState', {}).get('motionState')
                 trigger = data.get('trigger')
-                global _GLOBAL_MOW_STATE
                 _GLOBAL_MOW_STATE['motion_state'] = motion
                 _GLOBAL_MOW_STATE['trigger'] = trigger
                 if c.get('type') == 'spotArea':
                     zone_id = c.get('value')
-                    global _GLOBAL_ACTIVE_ZONE
                     if zone_id and zone_id != _GLOBAL_ACTIVE_ZONE:
                         _LOGGER.warning("Zone mow: %s (was %s) — clearing trace", zone_id, _GLOBAL_ACTIVE_ZONE)
                         _GLOBAL_ACTIVE_ZONE = zone_id
@@ -69,17 +69,14 @@ def _patch_on_pos_handler() -> None:
 
             elif cmd == 'onChargeState':
                 data = _json.loads(payload_str).get('body', {}).get('data', {})
-                global _GLOBAL_MOW_STATE
                 _GLOBAL_MOW_STATE['is_charging'] = bool(data.get('isCharging', 0))
 
             elif cmd == 'onBattery':
                 data = _json.loads(payload_str).get('body', {}).get('data', {})
-                global _GLOBAL_MOW_STATE
                 _GLOBAL_MOW_STATE['battery'] = data.get('value')
 
             elif cmd == 'onStats':
                 data = _json.loads(payload_str).get('body', {}).get('data', {})
-                global _GLOBAL_MOW_STATE
                 _GLOBAL_MOW_STATE['mowed_area_m2'] = round(data.get('mowedArea', 0) / 1_000_000, 1)
                 _GLOBAL_MOW_STATE['total_area_m2'] = round(data.get('area', 0) / 1_000_000, 1)
                 _GLOBAL_MOW_STATE['mow_time_s'] = data.get('time', 0)
@@ -91,6 +88,8 @@ def _patch_on_pos_handler() -> None:
             _LOGGER.debug("ATR intercept error for %s: %s", topic_split[2] if len(topic_split) > 2 else '?', e)
 
     MqttClient._handle_atr = _patched_handle_atr
+    _LOGGER.warning("onPos/onCleanInfo/onMapTrace interceptor registered via _handle_atr")
+
     _LOGGER.warning("onPos/onCleanInfo/onMapTrace interceptor registered via _handle_atr")
 
 

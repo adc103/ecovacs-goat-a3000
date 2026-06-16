@@ -129,6 +129,24 @@ class EcovacsMap(
                 return svg.encode()
             else:
                 _LOGGER.warning("image(): no zone data yet")
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose mow state so the Lovelace card can read it."""
+        try:
+            from custom_components.ecovacs.patches import get_mow_state, get_mower_heading  # noqa: PLC0415
+            state = dict(get_mow_state())
+            state['heading'] = get_mower_heading()
+            mowed = state.get('mowed_area_m2', 0)
+            total = state.get('total_area_m2', 0)
+            if total:
+                state['progress_pct'] = round(mowed / total * 100)
+            secs = state.get('mow_time_s', 0)
+            if secs:
+                state['mow_time_human'] = f"{secs // 3600}h {(secs % 3600) // 60}m"
+            return state
+        except Exception:
+            return {}
         else:
             # Vacuum: use Rust map module
             svg = self._map.get_svg_map()

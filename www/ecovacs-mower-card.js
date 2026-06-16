@@ -12,7 +12,7 @@
  *     3: Back Lawn
  */
 
-const CARD_VERSION = '2.3.0';
+const CARD_VERSION = '2.3.1';
 
 const _MOWER_COLOR = '#00aaff';  // must match map_renderer.py _MOWER_COLOR
 
@@ -75,15 +75,14 @@ class EcovacsMowerCard extends HTMLElement {
     if (!this.shadowRoot.querySelector('.card')) { this._render(); return; }
     this._updateStatusBar();
 
-    // Update mower heading and mow state from entity attributes
-    const mowerState = hass.states[this._config.entity];
-    if (mowerState?.attributes?.heading != null) {
-      this._mowerAngle = mowerState.attributes.heading;
-    }
-    // Read extended mow state from sensor if available
-    const mowStateSensor = hass.states['sensor.' + (this._config.entity.split('.')[1]) + '_mow_state'];
-    if (mowStateSensor?.attributes) {
-      this._mowState = mowStateSensor.attributes;
+    // Heading is read from image entity attributes below
+    // Read mow state from image entity attributes (heading, progress, charging etc)
+    const imgEntity = hass.states[this._config.image_entity];
+    if (imgEntity?.attributes) {
+      this._mowState = imgEntity.attributes;
+      if (imgEntity.attributes.heading != null) {
+        this._mowerAngle = imgEntity.attributes.heading;
+      }
       this._drawMowerOverlay();
     }
 

@@ -250,7 +250,8 @@ def _patch_clean_commands() -> None:
 
 
 def _patch_cr0e4u() -> None:
-    """Patch cr0e4u hardware definition for GOAT A3000 LiDAR."""
+    """Patch GOAT A3000 LiDAR hardware definitions."""
+    import importlib
     import deebot_client.hardware.cr0e4u as cr0e4u_module
     from deebot_client.capabilities import (
         Capabilities,
@@ -408,16 +409,25 @@ def _patch_cr0e4u() -> None:
         )
 
     cr0e4u_module.get_device_info = get_device_info
+    for module_name in ("cr0e4u", "o4kvvk"):
+        try:
+            hw_specific_module = importlib.import_module(
+                f"deebot_client.hardware.{module_name}"
+            )
+            hw_specific_module.get_device_info = get_device_info
+        except Exception:
+            _LOGGER.debug("No hardware module to patch for %s", module_name)
 
     # Directly inject our patched device info into the hardware cache
     # This overrides whatever was loaded before our patch ran
     try:
         import deebot_client.hardware as hw_module
         patched_info = get_device_info()
-        hw_module._DEVICES["cr0e4u"] = patched_info
-        hw_module._NOT_FOUND.discard("cr0e4u")
+        for model_id in ("cr0e4u", "o4kvvk"):
+            hw_module._DEVICES[model_id] = patched_info
+            hw_module._NOT_FOUND.discard(model_id)
         _LOGGER.warning(
-            "cr0e4u hardware definition patched successfully. "
+            "GOAT A3000 hardware definitions patched successfully. "
             "Device type: %s, Map capability: %s",
             patched_info.capabilities.device_type,
             patched_info.capabilities.map is not None,
@@ -425,7 +435,7 @@ def _patch_cr0e4u() -> None:
     except Exception as e:
         _LOGGER.error("Could not inject patched cr0e4u into hardware cache: %s", e)
 
-    _LOGGER.debug("cr0e4u patched for GOAT A3000 LiDAR")
+    _LOGGER.debug("GOAT A3000 hardware aliases patched")
 
 
 def _patch_clean_info_state() -> None:

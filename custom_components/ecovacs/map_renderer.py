@@ -340,8 +340,8 @@ def render_mower_map_from_store(
             d = pts_to_path(trace_pts)
             elements.append(
                 f'<path d="{d}" fill="none" '
-                f'stroke="white" stroke-opacity="0.5" '
-                f'stroke-width="{sw*0.6:.0f}" stroke-linecap="round"/>'
+                f'stroke="#e53935" stroke-opacity="0.82" '
+                f'stroke-width="{sw*0.75:.0f}" stroke-linecap="round"/>'
             )
 
     # 5b. Zone labels — rendered on top of obstacles and traces
